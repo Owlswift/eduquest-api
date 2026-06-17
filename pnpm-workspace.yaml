@@ -1,0 +1,7 @@
+allowBuilds:
+  '@prisma/engines': set this to true or false
+  '@scarf/scarf': true
+  bcrypt: true
+  msgpackr-extract: true
+  prisma: set this to true or false
+  unrs-resolver: set this to true or false
