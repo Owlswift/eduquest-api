@@ -1,13 +1,40 @@
 // This is your Prisma schema file,
 // learn more about it in the docs: https://pris.ly/d/prisma-schema
 
-// Get a free hosted Postgres database in seconds: `npx create-db`
-
 generator client {
-  provider = "prisma-client"
-  output   = "../generated/prisma"
+  provider = "prisma-client-js"
 }
 
 datasource db {
   provider = "postgresql"
+}
+
+enum ClassLevel {
+  SS1
+  SS2
+  SS3
+}
+
+enum ExamType {
+  WAEC
+  JAMB
+  NECO
+  POST_UTME
+}
+
+model User {
+  id           String     @id @default(cuid())
+  fullName     String
+  username     String     @unique
+  email        String     @unique
+  passwordHash String
+
+  classLevel   ClassLevel
+  examTarget   ExamType?
+
+  xp           Int        @default(0)
+  level        Int        @default(1)
+
+  createdAt    DateTime   @default(now())
+  updatedAt    DateTime   @updatedAt
 }
