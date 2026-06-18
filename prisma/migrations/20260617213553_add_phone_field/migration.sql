@@ -1,0 +1,4 @@
+-- AlterTable
+ALTER TABLE "User" ADD COLUMN     "phone" TEXT,
+ALTER COLUMN "classLevel" SET DEFAULT 'SS1',
+ALTER COLUMN "examTarget" SET DEFAULT 'WAEC';

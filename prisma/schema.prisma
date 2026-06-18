@@ -28,13 +28,24 @@ model User {
   username     String     @unique
   email        String     @unique
   passwordHash String
+  phone        String?
 
-  classLevel   ClassLevel
-  examTarget   ExamType?
+  classLevel   ClassLevel @default(SS1)
+  examTarget   ExamType?  @default(WAEC)
 
   xp           Int        @default(0)
   level        Int        @default(1)
 
   createdAt    DateTime   @default(now())
   updatedAt    DateTime   @updatedAt
+}
+
+model BlacklistedToken {
+  id        String   @id @default(cuid())
+  tokenJti  String   @unique
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  @@index([tokenJti])
+  @@index([expiresAt])
 }
