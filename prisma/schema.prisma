@@ -1,6 +1,5 @@
 // This is your Prisma schema file,
 // learn more about it in the docs: https://pris.ly/d/prisma-schema
-
 generator client {
   provider = "prisma-client-js"
 }
@@ -27,14 +26,24 @@ model User {
   fullName     String
   username     String     @unique
   email        String     @unique
-  passwordHash String
+  passwordHash String?    // made optional — Google users have no password
   phone        String?
+  googleId     String?    @unique  // NEW
+  avatarUrl    String?             // NEW
 
   classLevel   ClassLevel @default(SS1)
   examTarget   ExamType?  @default(WAEC)
 
+  coins        Int        @default(0)
   xp           Int        @default(0)
+  maxXp        Int        @default(500)
   level        Int        @default(1)
+  badges       Int        @default(0)
+  certificates Int        @default(0)
+  streak       Int        @default(0)
+  questionsAnswered Int   @default(0)
+  accuracy     Float      @default(0.0)
+  timeSpent    Int        @default(0)
 
   createdAt    DateTime   @default(now())
   updatedAt    DateTime   @updatedAt
