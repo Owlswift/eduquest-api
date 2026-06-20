@@ -10,6 +10,6 @@ export class UsersController {
 
   @Get('me')
   async getProfile(@CurrentUser() user: any) {
-    return this.users.findById(user.id);
+    return this.users.findById(user.sub);
   }
 }

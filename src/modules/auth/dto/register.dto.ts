@@ -1,4 +1,4 @@
-import { IsEmail, IsOptional, IsString, MinLength } from 'class-validator';
+import { IsArray, IsEmail, IsOptional, IsString, MinLength } from 'class-validator';
 
 export class RegisterDto {
   @IsString()
@@ -14,4 +14,25 @@ export class RegisterDto {
   @IsOptional()
   @IsString()
   phone?: string;
+
+  @IsOptional()
+  @IsString()
+  country?: string;
+
+  @IsOptional()
+  @IsString()
+  state?: string;
+
+  @IsOptional()
+  @IsString()
+  institution?: string;
+
+  @IsOptional()
+  @IsString()
+  age?: string;
+
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  interests?: string[];
 }

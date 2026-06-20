@@ -34,6 +34,12 @@ model User {
   classLevel   ClassLevel @default(SS1)
   examTarget   ExamType?  @default(WAEC)
 
+  country      String?
+  state        String?
+  institution  String?
+  age          String?
+  interests    String?    // JSON stringified array
+
   coins        Int        @default(0)
   xp           Int        @default(0)
   maxXp        Int        @default(500)

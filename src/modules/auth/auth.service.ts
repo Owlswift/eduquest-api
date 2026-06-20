@@ -29,6 +29,11 @@ export class AuthService {
         email: dto.email.toLowerCase().trim(),
         passwordHash: hash,
         phone: dto.phone?.toLowerCase().trim() || null,
+        country: dto.country?.toLowerCase().trim() || null,
+        state: dto.state?.toLowerCase().trim() || null,
+        institution: dto.institution?.toLowerCase().trim() || null,
+        age: dto.age?.toLowerCase().trim() || null,
+        interests: dto.interests ? JSON.stringify(dto.interests) : null,
       },
     });
 
@@ -38,8 +43,16 @@ export class AuthService {
   // ─── Email/Password Login ───────────────────────────────────────────────────
 
   async login(dto: any) {
-    const user = await this.prisma.user.findUnique({
-      where: { email: dto.email.toLowerCase().trim() },
+    const loginIdentifier = dto.email.toLowerCase().trim();
+    
+    // Try to find user by email or username
+    const user = await this.prisma.user.findFirst({
+      where: {
+        OR: [
+          { email: loginIdentifier },
+          { username: loginIdentifier },
+        ],
+      },
     });
 
     if (!user) throw new UnauthorizedException('Invalid credentials');
