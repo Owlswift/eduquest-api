@@ -21,23 +21,44 @@ export class AuthService {
 
   async register(dto: any) {
     const hash = await argon2.hash(dto.password);
+    const baseUsername = dto.email.split('@')[0].toLowerCase().trim();
+    const username = await this._uniqueUsername(baseUsername);
 
-    const user = await this.prisma.user.create({
-      data: {
-        fullName: dto.name.toLowerCase().trim(),
-        username: dto.email.split('@')[0].toLowerCase().trim(),
-        email: dto.email.toLowerCase().trim(),
-        passwordHash: hash,
-        phone: dto.phone?.toLowerCase().trim() || null,
-        country: dto.country?.toLowerCase().trim() || null,
-        state: dto.state?.toLowerCase().trim() || null,
-        institution: dto.institution?.toLowerCase().trim() || null,
-        age: dto.age?.toLowerCase().trim() || null,
-        interests: dto.interests ? JSON.stringify(dto.interests) : null,
-      },
-    });
+    try {
+      const user = await this.prisma.user.create({
+        data: {
+          fullName: dto.name.toLowerCase().trim(),
+          username,
+          email: dto.email.toLowerCase().trim(),
+          passwordHash: hash,
+          phone: dto.phone?.toLowerCase().trim() || null,
+          country: dto.country?.toLowerCase().trim() || null,
+          state: dto.state?.toLowerCase().trim() || null,
+          institution: dto.institution?.toLowerCase().trim() || null,
+          age: dto.age?.toLowerCase().trim() || null,
+          interests: dto.interests ? JSON.stringify(dto.interests) : null,
+        },
+      });
 
-    return this.signToken(user.id, user.email);
+      return this.signToken(user.id, user.email);
+    } catch (error: any) {
+      // Handle unique constraint violations gracefully
+      if (error.code === 'P2002') {
+        const constraint = error.meta?.constraint?.fields?.[0];
+        
+        if (constraint === 'email') {
+          throw new ConflictException('An account with this email already exists');
+        } else if (constraint === 'phone') {
+          throw new ConflictException('An account with this phone number already exists');
+        } else if (constraint === 'username') {
+          // This shouldn't happen with _uniqueUsername, but handle it just in case
+          throw new ConflictException('An account with this username already exists');
+        }
+      }
+      
+      // Re-throw other errors
+      throw error;
+    }
   }
 
   // ─── Email/Password Login ───────────────────────────────────────────────────

@@ -58,13 +58,18 @@ export class LoggingInterceptor implements NestInterceptor {
           if (body) logData.body = body;
 
           // Log response for auth endpoints (truncate tokens)
-          if (originalUrl.startsWith('/auth') && data && typeof data === 'object') {
+          if (originalUrl.startsWith('/api/auth') && data && typeof data === 'object') {
             const sanitizedResponse = { ...data };
             if (sanitizedResponse.accessToken) {
               sanitizedResponse.accessToken =
                 sanitizedResponse.accessToken.substring(0, 20) + '...';
             }
             logData.response = sanitizedResponse;
+          }
+
+          // Log response for quiz endpoints
+          if (originalUrl.startsWith('/api/quiz') && data) {
+            logData.response = data;
           }
 
           // Log response for 4xx errors

@@ -18,11 +18,14 @@ async function bootstrap() {
   // Enable global request/response logging
   app.useGlobalInterceptors(new LoggingInterceptor());
 
+  // Set global API prefix
+  app.setGlobalPrefix('api');
+
   const port = process.env.PORT ?? 3000;
   const logger = new Logger('Bootstrap');
 
-  await app.listen(port);
-  logger.log(`EduQuest API running on http://localhost:${port}`);
+  await app.listen(port, '0.0.0.0');
+  logger.log(`EduQuest API running on http://0.0.0.0:${port}`);
   logger.log('Environment:', process.env.NODE_ENV);
 }
 bootstrap();
