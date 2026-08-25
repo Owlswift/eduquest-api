@@ -23,10 +23,18 @@ export class GoogleTokenVerifier {
 
   async verify(idToken: string): Promise<GooglePayload> {
     try {
-      const ticket = await this.client.verifyIdToken({
-        idToken,
-        audience: process.env.GOOGLE_CLIENT_ID,
-      });
+      const ticket = await Promise.race([
+        this.client.verifyIdToken({
+          idToken,
+          audience: process.env.GOOGLE_CLIENT_ID,
+        }),
+        new Promise<never>((_, reject) =>
+          setTimeout(
+            () => reject(new Error('Timed out contacting Google')),
+            8000,
+          ),
+        ),
+      ]);
 
       const payload = ticket.getPayload();
 
@@ -40,7 +48,8 @@ export class GoogleTokenVerifier {
         fullName: payload.name ?? payload.email.split('@')[0],
         avatarUrl: payload.picture ?? null,
       };
-    } catch {
+    } catch (err) {
+      if (err instanceof UnauthorizedException) throw err;
       throw new UnauthorizedException('Failed to verify Google token');
     }
   }
