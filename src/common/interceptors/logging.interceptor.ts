@@ -29,7 +29,9 @@ export class LoggingInterceptor implements NestInterceptor {
         return request.body;
       }
       const sanitizedBody: Record<string, any> = {};
-      for (const [key, value] of Object.entries(request.body as Record<string, any>)) {
+      for (const [key, value] of Object.entries(
+        request.body as Record<string, any>,
+      )) {
         if (key.toLowerCase().includes('password')) {
           sanitizedBody[key] = '***REDACTED***';
         } else {
@@ -58,7 +60,11 @@ export class LoggingInterceptor implements NestInterceptor {
           if (body) logData.body = body;
 
           // Log response for auth endpoints (truncate tokens)
-          if (originalUrl.startsWith('/api/auth') && data && typeof data === 'object') {
+          if (
+            originalUrl.startsWith('/api/auth') &&
+            data &&
+            typeof data === 'object'
+          ) {
             const sanitizedResponse = { ...data };
             if (sanitizedResponse.accessToken) {
               sanitizedResponse.accessToken =

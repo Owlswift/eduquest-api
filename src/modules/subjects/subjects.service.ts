@@ -48,15 +48,69 @@ export class SubjectsService {
 
   async seedSubjects() {
     const subjects = [
-      { id: 'math', name: 'Mathematics', icon: 'functions_rounded', color: '#FF4F46E5', currentTopic: 'Algebra' },
-      { id: 'english', name: 'English', icon: 'menu_book_rounded', color: '#FF7C3AED', currentTopic: 'Grammar' },
-      { id: 'physics', name: 'Physics', icon: 'science_rounded', color: '#FF0EA5E9', currentTopic: 'Mechanics' },
-      { id: 'chemistry', name: 'Chemistry', icon: 'biotech_rounded', color: '#FF8B5CF6', currentTopic: 'Atomic Structure' },
-      { id: 'biology', name: 'Biology', icon: 'eco_rounded', color: '#FF22C55E', currentTopic: 'Cell Biology' },
-      { id: 'economics', name: 'Economics', icon: 'trending_up_rounded', color: '#FFF97316', currentTopic: 'Supply & Demand' },
-      { id: 'government', name: 'Government', icon: 'account_balance_rounded', color: '#FF3B82F6', currentTopic: 'Nigerian Constitution' },
-      { id: 'literature', name: 'Literature', icon: 'auto_stories_rounded', color: '#FFEF4444', currentTopic: 'Poetry' },
-      { id: 'further_math', name: 'Further Math', icon: 'calculate_rounded', color: '#FF6366F1', currentTopic: 'Calculus' },
+      {
+        id: 'math',
+        name: 'Mathematics',
+        icon: 'functions_rounded',
+        color: '#FF4F46E5',
+        currentTopic: 'Algebra',
+      },
+      {
+        id: 'english',
+        name: 'English',
+        icon: 'menu_book_rounded',
+        color: '#FF7C3AED',
+        currentTopic: 'Grammar',
+      },
+      {
+        id: 'physics',
+        name: 'Physics',
+        icon: 'science_rounded',
+        color: '#FF0EA5E9',
+        currentTopic: 'Mechanics',
+      },
+      {
+        id: 'chemistry',
+        name: 'Chemistry',
+        icon: 'biotech_rounded',
+        color: '#FF8B5CF6',
+        currentTopic: 'Atomic Structure',
+      },
+      {
+        id: 'biology',
+        name: 'Biology',
+        icon: 'eco_rounded',
+        color: '#FF22C55E',
+        currentTopic: 'Cell Biology',
+      },
+      {
+        id: 'economics',
+        name: 'Economics',
+        icon: 'trending_up_rounded',
+        color: '#FFF97316',
+        currentTopic: 'Supply & Demand',
+      },
+      {
+        id: 'government',
+        name: 'Government',
+        icon: 'account_balance_rounded',
+        color: '#FF3B82F6',
+        currentTopic: 'Nigerian Constitution',
+      },
+      {
+        id: 'literature',
+        name: 'Literature',
+        icon: 'auto_stories_rounded',
+        color: '#FFEF4444',
+        currentTopic: 'Poetry',
+      },
+      {
+        id: 'further_math',
+        name: 'Further Math',
+        icon: 'calculate_rounded',
+        color: '#FF6366F1',
+        currentTopic: 'Calculus',
+      },
     ];
 
     for (const subject of subjects) {

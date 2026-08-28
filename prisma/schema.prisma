@@ -19,6 +19,35 @@ enum ExamType {
   POST_UTME
 }
 
+enum UserRole {
+  STUDENT
+  ADMIN
+}
+
+enum CurriculumImportStatus {
+  UPLOADED
+  EXTRACTING
+  EXTRACTED
+  EXTRACTION_FAILED
+  REVIEWED
+  SAVED
+}
+
+enum LessonState {
+  INTRODUCTION
+  ASSESS_PRIOR_KNOWLEDGE
+  EXPLAIN_CONCEPT
+  EXAMPLE
+  CHECK_UNDERSTANDING
+  MINI_QUIZ
+  COMPLETED
+}
+
+enum TutorMessageRole {
+  TUTOR
+  STUDENT
+}
+
 model User {
   id           String     @id @default(cuid())
   fullName     String
@@ -29,6 +58,7 @@ model User {
   googleId     String?    @unique
   avatarUrl    String?
 
+  role         UserRole   @default(STUDENT)
   classLevel   ClassLevel @default(SS1)
   examTarget   ExamType?  @default(WAEC)
 
@@ -52,6 +82,9 @@ model User {
 
   createdAt    DateTime   @default(now())
   updatedAt    DateTime   @updatedAt
+
+  tutorSessions  TutorSession[]
+  studentMastery StudentMastery[]
 }
 
 model BlacklistedToken {
@@ -73,7 +106,119 @@ model Subject {
   progress     Float      @default(0.0)
   createdAt    DateTime   @default(now())
 
-  questions    Question[]
+  questions        Question[]
+  curriculumImports CurriculumImport[]
+  curriculumTopics  CurriculumTopic[]
+  tutorSessions     TutorSession[]
+}
+
+model CurriculumImport {
+  id               String                 @id @default(cuid())
+  subjectId        String
+  classLevel       ClassLevel
+  fileName         String
+  pageCount        Int?
+  rawPages         Json?
+  extractedJson    Json?
+  validationErrors Json?
+  status           CurriculumImportStatus @default(UPLOADED)
+  errorMessage     String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  subject Subject           @relation(fields: [subjectId], references: [id], onDelete: Cascade)
+  topics  CurriculumTopic[]
+
+  @@index([subjectId, classLevel])
+}
+
+model CurriculumTopic {
+  id         String     @id @default(cuid())
+  subjectId  String
+  classLevel ClassLevel
+  importId   String?
+
+  theme                     String
+  learningOutcome           String
+  focalCompetence           String
+  topic                     String
+  performanceObjectives     Json
+  content                   Json
+  keyCompetenciesAndValues  Json
+  learningActivities        Json
+  teachingLearningResources Json
+  evaluationGuide           Json
+  sourcePage                Int?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  subject Subject           @relation(fields: [subjectId], references: [id], onDelete: Cascade)
+  import  CurriculumImport? @relation(fields: [importId], references: [id], onDelete: SetNull)
+
+  tutorSessions  TutorSession[]
+  studentMastery StudentMastery[]
+
+  @@unique([subjectId, classLevel, theme, topic])
+  @@index([subjectId, classLevel])
+}
+
+model TutorSession {
+  id               String      @id @default(cuid())
+  userId           String
+  subjectId        String
+  classLevel       ClassLevel
+  topicId          String
+  state            LessonState @default(INTRODUCTION)
+  masteryAtStart   Int?
+  weakAreasAtStart Json?
+  completedAt      DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user     User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  subject  Subject         @relation(fields: [subjectId], references: [id], onDelete: Cascade)
+  topic    CurriculumTopic @relation(fields: [topicId], references: [id], onDelete: Cascade)
+  messages TutorMessage[]
+
+  @@index([userId, subjectId, classLevel])
+}
+
+model TutorMessage {
+  id        String            @id @default(cuid())
+  sessionId String
+  role      TutorMessageRole
+  content   String
+  blocks    Json?
+  stateAt   LessonState
+
+  createdAt DateTime @default(now())
+
+  session TutorSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@index([sessionId])
+}
+
+model StudentMastery {
+  id            String     @id @default(cuid())
+  userId        String
+  subjectId     String
+  classLevel    ClassLevel
+  topicId       String
+  masteryScore  Int        @default(0)
+  weakAreas     Json?
+  lastStudiedAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user  User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  topic CurriculumTopic @relation(fields: [topicId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, topicId])
+  @@index([userId, subjectId, classLevel])
 }
 
 model Question {

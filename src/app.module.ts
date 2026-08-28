@@ -6,6 +6,8 @@ import { AuthModule } from './modules/auth/auth.module';
 import { UsersModule } from './modules/users/users.module';
 import { SubjectsModule } from './modules/subjects/subjects.module';
 import { QuizModule } from './modules/quiz/quiz.module';
+import { CurriculumModule } from './modules/curriculum/curriculum.module';
+import { TutorModule } from './modules/tutor/tutor.module';
 
 @Module({
   imports: [
@@ -16,6 +18,8 @@ import { QuizModule } from './modules/quiz/quiz.module';
     UsersModule,
     SubjectsModule,
     QuizModule,
+    CurriculumModule,
+    TutorModule,
   ],
 })
 export class AppModule {}
