@@ -86,30 +86,68 @@ export class CompetitionsService {
 
   // ─── GET /competitions/:id/leaderboard ───────────────────────────────────
 
+  /** Ranks by XP earned during the competition window (via
+   *  DailyActivity.xpEarned), NOT `currentXp - xpAtJoin`. Joining is
+   *  allowed before `startsAt` (see `join`), so scoring from the join
+   *  snapshot alone would let an early joiner's pre-start XP count
+   *  toward the competition - clamping each participant's window to
+   *  `max(joinedAt, startsAt)..min(now, endsAt)` closes that. */
   async leaderboard(userId: string, competitionId: string, limit = 20) {
     const competition = await this.prisma.competition.findUnique({
       where: { id: competitionId },
     });
     if (!competition) throw new NotFoundException('Competition not found');
 
-    const entries = await this.prisma.competitionParticipant.findMany({
+    const participants = await this.prisma.competitionParticipant.findMany({
       where: { competitionId },
-      include: { user: { select: { id: true, fullName: true, xp: true } } },
+      include: { user: { select: { id: true, fullName: true } } },
     });
+    if (participants.length === 0) return { top: [], me: null };
 
-    const ranked = entries
-      .map((e) => ({
-        userId: e.userId,
-        name: this.firstName(e.user.fullName),
-        xpEarned: Math.max(0, e.user.xp - e.xpAtJoin),
-        isMe: e.userId === userId,
-      }))
+    const now = new Date();
+    const windowEnd = now < competition.endsAt ? now : competition.endsAt;
+
+    const scored = await Promise.all(
+      participants.map(async (p) => {
+        const windowStart =
+          p.joinedAt > competition.startsAt ? p.joinedAt : competition.startsAt;
+
+        let xpEarned = 0;
+        if (windowStart <= windowEnd) {
+          // DailyActivity rows are day-granular (midnight of the Lagos
+          // calendar day), so compare against whole-day boundaries -
+          // otherwise a competition starting mid-day would exclude that
+          // day's DailyActivity row entirely.
+          const sum = await this.prisma.dailyActivity.aggregate({
+            where: {
+              userId: p.userId,
+              date: { gte: this._dayStart(windowStart), lte: this._dayStart(windowEnd) },
+            },
+            _sum: { xpEarned: true },
+          });
+          xpEarned = sum._sum.xpEarned ?? 0;
+        }
+
+        return {
+          userId: p.userId,
+          name: this.firstName(p.user.fullName),
+          xpEarned,
+          isMe: p.userId === userId,
+        };
+      }),
+    );
+
+    const ranked = scored
       .sort((a, b) => b.xpEarned - a.xpEarned)
       .map((e, i) => ({ rank: i + 1, ...e }));
 
     const me = ranked.find((e) => e.isMe) ?? null;
 
     return { top: ranked.slice(0, limit), me };
+  }
+
+  private _dayStart(d: Date): Date {
+    return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()));
   }
 
   private firstName(fullName: string): string {
