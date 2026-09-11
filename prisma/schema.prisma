@@ -83,8 +83,28 @@ model User {
   createdAt    DateTime   @default(now())
   updatedAt    DateTime   @updatedAt
 
-  tutorSessions  TutorSession[]
-  studentMastery StudentMastery[]
+  tutorSessions   TutorSession[]
+  studentMastery  StudentMastery[]
+  dailyActivities DailyActivity[]
+}
+
+/// One row per user per calendar day (Africa/Lagos), tracking how much
+/// studying happened that day. Backs the Learn screen's streak strip and
+/// "Today's Goal" card, and the user's `streak` counter.
+model DailyActivity {
+  id                String   @id @default(cuid())
+  userId            String
+  date              DateTime @db.Date
+  questionsAnswered Int      @default(0)
+  lessonsStudied    Int      @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, date])
+  @@index([userId, date])
 }
 
 model BlacklistedToken {

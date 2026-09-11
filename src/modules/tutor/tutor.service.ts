@@ -6,6 +6,7 @@ import {
 } from '@nestjs/common';
 import { ClassLevel, LessonState, TutorMessageRole } from '@prisma/client';
 import { PrismaService } from '../../database/prisma.service';
+import { ActivityService } from '../activity/activity.service';
 import { TutorLlmService, TutorHistoryEntry } from './tutor-llm.service';
 import { TutorTurn } from './tutor-schema';
 import { VoiceSttService } from '../voice/voice-stt.service';
@@ -73,7 +74,14 @@ export class TutorService {
     private prisma: PrismaService,
     private llm: TutorLlmService,
     private stt: VoiceSttService,
+    private activity: ActivityService,
   ) {}
+
+  /** Records a lesson interaction toward today's study activity/streak,
+   *  swallowing errors so activity tracking never breaks a lesson turn. */
+  private trackLesson(userId: string): void {
+    void this.activity.recordLesson(userId).catch(() => {});
+  }
 
   // ─── POST /tutor/sessions ───────────────────────────────────────────────
 
@@ -81,6 +89,7 @@ export class TutorService {
     userId: string,
     params: { subjectId: string; classLevel: ClassLevel; topicId: string },
   ) {
+    this.trackLesson(userId);
     const topic = await this.prisma.curriculumTopic.findUnique({
       where: { id: params.topicId },
       include: { subject: true },
@@ -166,6 +175,7 @@ export class TutorService {
     if (session.state === LessonState.COMPLETED) {
       throw new ForbiddenException('This lesson has already been completed');
     }
+    this.trackLesson(userId);
 
     await this.prisma.tutorMessage.create({
       data: {
@@ -268,6 +278,7 @@ export class TutorService {
         'Assessment can only be skipped during the prior-knowledge check',
       );
     }
+    this.trackLesson(userId);
 
     const mastery = await this._getOrCreateMastery(
       userId,
@@ -428,6 +439,62 @@ export class TutorService {
       include: { topic: { select: { theme: true, topic: true } } },
       orderBy: { updatedAt: 'desc' },
     });
+  }
+
+  // ─── GET /tutor/continue-learning ───────────────────────────────────────
+
+  private static readonly LESSON_STATE_ORDER: LessonState[] = [
+    'INTRODUCTION',
+    'ASSESS_PRIOR_KNOWLEDGE',
+    'EXPLAIN_CONCEPT',
+    'EXAMPLE',
+    'CHECK_UNDERSTANDING',
+    'MINI_QUIZ',
+    'COMPLETED',
+  ];
+
+  /**
+   * Topics the student has started but not finished - one entry per topic
+   * (the most recently active session, for students who started a topic
+   * more than once), most recently active first. Backs the dashboard's
+   * "Continue Learning" list, which should only ever show in-progress
+   * work, never the full curriculum.
+   */
+  async listInProgressTopics(userId: string, subjectId?: string) {
+    const sessions = await this.prisma.tutorSession.findMany({
+      where: { userId, completedAt: null, ...(subjectId ? { subjectId } : {}) },
+      include: {
+        topic: {
+          select: { id: true, subjectId: true, classLevel: true, theme: true, topic: true },
+        },
+      },
+      orderBy: { updatedAt: 'desc' },
+    });
+
+    const seenTopicIds = new Set<string>();
+    const result: {
+      sessionId: string;
+      state: LessonState;
+      progressPercent: number;
+      updatedAt: Date;
+      topic: { id: string; subjectId: string; classLevel: ClassLevel; theme: string; topic: string };
+    }[] = [];
+
+    for (const session of sessions) {
+      if (seenTopicIds.has(session.topicId)) continue;
+      seenTopicIds.add(session.topicId);
+      const stateIndex = TutorService.LESSON_STATE_ORDER.indexOf(session.state);
+      result.push({
+        sessionId: session.id,
+        state: session.state,
+        progressPercent: Math.round(
+          (Math.max(stateIndex, 0) / (TutorService.LESSON_STATE_ORDER.length - 1)) * 100,
+        ),
+        updatedAt: session.updatedAt,
+        topic: session.topic,
+      });
+    }
+    return result;
   }
 
   // ─── Helpers ─────────────────────────────────────────────────────────────

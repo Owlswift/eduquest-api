@@ -8,11 +8,13 @@ import { SubjectsModule } from './modules/subjects/subjects.module';
 import { QuizModule } from './modules/quiz/quiz.module';
 import { CurriculumModule } from './modules/curriculum/curriculum.module';
 import { TutorModule } from './modules/tutor/tutor.module';
+import { ActivityModule } from './modules/activity/activity.module';
 
 @Module({
   imports: [
     ConfigModule.forRoot({ isGlobal: true }),
     PrismaModule,
+    ActivityModule,
     HealthModule,
     AuthModule,
     UsersModule,

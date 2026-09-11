@@ -202,4 +202,18 @@ export class TutorController {
   ) {
     return this.tutor.listMastery(user.sub, subjectId, classLevel);
   }
+
+  // GET /tutor/continue-learning?subjectId=
+  @Get('continue-learning')
+  @ApiOperation({
+    summary:
+      "List topics with an unfinished tutor session for the current student - one entry per topic, most recently active first",
+  })
+  @ApiQuery({ name: 'subjectId', required: false })
+  async listContinueLearning(
+    @CurrentUser() user: any,
+    @Query('subjectId') subjectId?: string,
+  ) {
+    return this.tutor.listInProgressTopics(user.sub, subjectId);
+  }
 }

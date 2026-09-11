@@ -1,10 +1,14 @@
 import { Injectable, ConflictException } from '@nestjs/common';
 import { PrismaService } from '../../database/prisma.service';
+import { ActivityService } from '../activity/activity.service';
 import { UpdateProfileDto } from './dto/update-profile.dto';
 
 @Injectable()
 export class UsersService {
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private prisma: PrismaService,
+    private activity: ActivityService,
+  ) {}
 
   // ─── Get profile ────────────────────────────────────────────────────────────
 
@@ -149,6 +153,8 @@ export class UsersService {
       },
     });
 
+    await this.activity.recordQuestions(userId, QUESTIONS_ANSWERED);
+
     // Calculate approximate rank (simplified — replace with real ranking query)
     const nationalRank = Math.max(1, totalUsers - Math.floor(Math.random() * 100));
     const stateRank = Math.max(1, Math.floor(totalUsers * 0.1) - Math.floor(Math.random() * 20));
@@ -162,5 +168,49 @@ export class UsersService {
       nationalRank,
       stateRank,
     };
+  }
+
+  // ─── All-time leaderboard (ranked by total XP) ───────────────────────────────
+
+  private firstName(fullName: string): string {
+    const first = (fullName ?? '').trim().split(/\s+/)[0] ?? '';
+    if (!first) return 'Student';
+    return first.charAt(0).toUpperCase() + first.slice(1);
+  }
+
+  async getLeaderboard(userId: string, limit = 20) {
+    const [rows, me] = await Promise.all([
+      this.prisma.user.findMany({
+        where: { role: 'STUDENT' },
+        orderBy: [{ xp: 'desc' }, { createdAt: 'asc' }],
+        take: limit,
+        select: { id: true, fullName: true, xp: true },
+      }),
+      this.prisma.user.findUnique({
+        where: { id: userId },
+        select: { fullName: true, xp: true },
+      }),
+    ]);
+
+    const top = rows.map((u, i) => ({
+      rank: i + 1,
+      name: this.firstName(u.fullName),
+      xp: u.xp,
+      isMe: u.id === userId,
+    }));
+
+    let meEntry: { rank: number; name: string; xp: number } | null = null;
+    if (me) {
+      const ahead = await this.prisma.user.count({
+        where: { role: 'STUDENT', xp: { gt: me.xp } },
+      });
+      meEntry = {
+        rank: ahead + 1,
+        name: this.firstName(me.fullName),
+        xp: me.xp,
+      };
+    }
+
+    return { top, me: meEntry };
   }
 }

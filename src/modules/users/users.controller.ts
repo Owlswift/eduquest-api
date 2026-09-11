@@ -1,5 +1,6 @@
 import { Controller, Get, Patch, Post, Body, UseGuards, HttpCode, HttpStatus } from '@nestjs/common';
 import { UsersService } from './users.service';
+import { ActivityService } from '../activity/activity.service';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { UpdateProfileDto } from './dto/update-profile.dto';
@@ -7,7 +8,10 @@ import { UpdateProfileDto } from './dto/update-profile.dto';
 @Controller('users')
 @UseGuards(JwtAuthGuard)
 export class UsersController {
-  constructor(private users: UsersService) {}
+  constructor(
+    private users: UsersService,
+    private activity: ActivityService,
+  ) {}
 
   // GET /users/me
   @Get('me')
@@ -24,8 +28,22 @@ export class UsersController {
       subjects: userData.subjects,
       coins: userData.coins,
       xp: userData.xp,
+      maxXp: userData.maxXp,
       level: userData.level,
+      streak: userData.streak,
     };
+  }
+
+  // GET /users/daily-summary
+  @Get('daily-summary')
+  async getDailySummary(@CurrentUser() user: any) {
+    return this.activity.getDailySummary(user.sub);
+  }
+
+  // GET /users/leaderboard
+  @Get('leaderboard')
+  async getLeaderboard(@CurrentUser() user: any) {
+    return this.users.getLeaderboard(user.sub);
   }
 
   // PATCH /users/profile

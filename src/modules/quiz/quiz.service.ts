@@ -1,10 +1,14 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../../database/prisma.service';
+import { ActivityService } from '../activity/activity.service';
 import { ClassLevel } from '@prisma/client';
 
 @Injectable()
 export class QuizService {
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private prisma: PrismaService,
+    private activity: ActivityService,
+  ) {}
 
   // ─── GET /quiz/questions ────────────────────────────────────────────────────
 
@@ -71,6 +75,9 @@ export class QuizService {
       },
       select: { id: true, coins: true, xp: true, questionsAnswered: true },
     });
+
+    // Count these toward today's study activity / streak.
+    await this.activity.recordQuestions(userId, dto.totalQuestions);
 
     // Simple rank calculation — count users with more XP
     const [nationalRank, stateRank] = await Promise.all([
