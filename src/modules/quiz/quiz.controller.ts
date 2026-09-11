@@ -8,12 +8,16 @@ import {
   ParseIntPipe,
   DefaultValuePipe,
 } from '@nestjs/common';
+import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { QuizService } from './quiz.service';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { ClassLevel } from '@prisma/client';
 
+@ApiTags('quiz')
+@ApiBearerAuth('access-token')
 @Controller('quiz')
+@UseGuards(JwtAuthGuard)
 export class QuizController {
   constructor(private quiz: QuizService) {}
 
