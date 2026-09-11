@@ -32,6 +32,9 @@ export class QuizService {
 
     const shuffled = all.sort(() => Math.random() - 0.5).slice(0, count);
 
+    // correctAnswerId is deliberately withheld - sending it would let a
+    // client read the answer straight out of the network response.
+    // Grading happens server-side in submitQuizResults instead.
     return shuffled.map((q) => ({
       id: q.id,
       subjectId: q.subjectId,
@@ -39,7 +42,6 @@ export class QuizService {
       questionText: q.questionText,
       explanation: q.explanation,
       difficulty: q.difficulty,
-      correctAnswerId: q.correctAnswerId,
       options: q.options.map((o) => ({ id: o.id, text: o.text })),
     }));
   }
@@ -50,16 +52,28 @@ export class QuizService {
     userId: string,
     dto: {
       subjectId: string;
-      correctAnswers: number;
-      totalQuestions: number;
+      answers: { questionId: string; selectedOptionId: string }[];
       timeTaken: number;
     },
   ) {
     const COINS_PER_CORRECT = 10;
     const XP_PER_CORRECT = 10;
 
-    const earnedCoins = dto.correctAnswers * COINS_PER_CORRECT;
-    const earnedXp = dto.correctAnswers * XP_PER_CORRECT;
+    // Grade server-side: look up the real correctAnswerId for every
+    // question submitted, rather than trusting a client-reported score.
+    const questions = await this.prisma.question.findMany({
+      where: { id: { in: dto.answers.map((a) => a.questionId) } },
+      select: { id: true, correctAnswerId: true },
+    });
+    const correctById = new Map(questions.map((q) => [q.id, q.correctAnswerId]));
+
+    const totalQuestions = dto.answers.length;
+    const correctAnswers = dto.answers.filter(
+      (a) => correctById.get(a.questionId) === a.selectedOptionId,
+    ).length;
+
+    const earnedCoins = correctAnswers * COINS_PER_CORRECT;
+    const earnedXp = correctAnswers * XP_PER_CORRECT;
 
     // Update user stats atomically
     const user = await this.prisma.user.update({
@@ -67,10 +81,10 @@ export class QuizService {
       data: {
         coins: { increment: earnedCoins },
         xp: { increment: earnedXp },
-        questionsAnswered: { increment: dto.totalQuestions },
+        questionsAnswered: { increment: totalQuestions },
         // Recalculate accuracy as rolling average
         accuracy: {
-          set: await this._newAccuracy(userId, dto.correctAnswers, dto.totalQuestions),
+          set: await this._newAccuracy(userId, correctAnswers, totalQuestions),
         },
       },
       select: { id: true, coins: true, xp: true, questionsAnswered: true },
@@ -78,7 +92,7 @@ export class QuizService {
 
     // Count these toward today's study activity / streak, and today's XP
     // toward the weekly/monthly leaderboard windows.
-    await this.activity.recordQuestions(userId, dto.totalQuestions);
+    await this.activity.recordQuestions(userId, totalQuestions);
     await this.activity.recordXp(userId, earnedXp);
 
     // Simple rank calculation — count users with more XP
@@ -93,8 +107,8 @@ export class QuizService {
     return {
       earnedCoins,
       earnedXp,
-      questionsAnsweredInChallenge: dto.totalQuestions,
-      correctAnswers: dto.correctAnswers,
+      questionsAnsweredInChallenge: totalQuestions,
+      correctAnswers,
       nationalRank,
       stateRank,
       totalCoins: user.coins,

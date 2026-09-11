@@ -13,6 +13,7 @@ import { QuizService } from './quiz.service';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { ClassLevel } from '@prisma/client';
+import { SubmitQuizDto } from './dto/submit-quiz.dto';
 
 @ApiTags('quiz')
 @ApiBearerAuth('access-token')
@@ -33,16 +34,7 @@ export class QuizController {
 
   // POST /quiz/submit
   @Post('submit')
-  async submitResults(
-    @CurrentUser() user: any,
-    @Body()
-    dto: {
-      subjectId: string;
-      correctAnswers: number;
-      totalQuestions: number;
-      timeTaken: number;
-    },
-  ) {
+  async submitResults(@CurrentUser() user: any, @Body() dto: SubmitQuizDto) {
     return this.quiz.submitQuizResults(user.sub, dto);
   }
 
