@@ -11,11 +11,13 @@ import { TutorModule } from './modules/tutor/tutor.module';
 import { ActivityModule } from './modules/activity/activity.module';
 import { CompetitionsModule } from './modules/competitions/competitions.module';
 import { RewardsModule } from './modules/rewards/rewards.module';
+import { MailerModule } from './modules/mailer/mailer.module';
 
 @Module({
   imports: [
     ConfigModule.forRoot({ isGlobal: true }),
     PrismaModule,
+    MailerModule,
     ActivityModule,
     HealthModule,
     AuthModule,

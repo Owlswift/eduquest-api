@@ -1,20 +1,30 @@
 import {
   Injectable,
+  Logger,
   UnauthorizedException,
   ConflictException,
+  BadRequestException,
 } from '@nestjs/common';
 import { PrismaService } from '../../database/prisma.service';
 import * as argon2 from 'argon2';
 import { JwtService } from '@nestjs/jwt';
 import * as crypto from 'crypto';
 import { GoogleTokenVerifier } from './strategies/google.strategy';
+import { MailerService } from '../mailer/mailer.service';
 
 @Injectable()
 export class AuthService {
+  private readonly logger = new Logger(AuthService.name);
+
+  private static readonly OTP_TTL_MINUTES = 10;
+  private static readonly OTP_MAX_ATTEMPTS = 5;
+  private static readonly OTP_RESEND_COOLDOWN_SECONDS = 60;
+
   constructor(
     private prisma: PrismaService,
     private jwt: JwtService,
     private googleVerifier: GoogleTokenVerifier,
+    private mailer: MailerService,
   ) {}
 
   // ─── Email/Password Register ────────────────────────────────────────────────
@@ -158,7 +168,127 @@ export class AuthService {
     return { message: 'Logged out successfully' };
   }
 
+  // ─── Forgot password (send OTP) ──────────────────────────────────────────────
+
+  /** Always responds the same way whether or not the email exists, so the
+   *  endpoint can't be used to enumerate registered accounts. Only
+   *  actually creates/sends a code when the account exists. */
+  async forgotPassword(email: string) {
+    const normalized = email.toLowerCase().trim();
+    const user = await this.prisma.user.findUnique({ where: { email: normalized } });
+
+    if (user) {
+      const recent = await this.prisma.passwordResetOtp.findFirst({
+        where: {
+          userId: user.id,
+          consumedAt: null,
+          createdAt: {
+            gt: new Date(Date.now() - AuthService.OTP_RESEND_COOLDOWN_SECONDS * 1000),
+          },
+        },
+        orderBy: { createdAt: 'desc' },
+      });
+      if (!recent) {
+        const code = crypto.randomInt(0, 1_000_000).toString().padStart(6, '0');
+        const codeHash = await argon2.hash(code);
+
+        await this.prisma.passwordResetOtp.create({
+          data: {
+            userId: user.id,
+            codeHash,
+            expiresAt: new Date(Date.now() + AuthService.OTP_TTL_MINUTES * 60 * 1000),
+          },
+        });
+
+        // A delivery failure (bad provider config, rate limit, etc.) is our
+        // problem, not something to expose to the caller - the response
+        // must stay identical either way so this endpoint can't be used to
+        // probe for registered emails or provider outages.
+        try {
+          await this.mailer.send(
+            user.email,
+            'Your EduQuest password reset code',
+            `<p>Hi ${this.firstName(user.fullName)},</p>` +
+              `<p>Your password reset code is:</p>` +
+              `<p style="font-size:28px;font-weight:700;letter-spacing:4px">${code}</p>` +
+              `<p>This code expires in ${AuthService.OTP_TTL_MINUTES} minutes. If you didn't request this, you can ignore this email.</p>`,
+          );
+        } catch (err) {
+          this.logger.error(`Failed to send password reset email to ${user.email}`, err as Error);
+        }
+      }
+    }
+
+    return { message: 'If that email is registered, a reset code has been sent.' };
+  }
+
+  // ─── Verify OTP → short-lived reset token ────────────────────────────────────
+
+  async verifyOtp(email: string, code: string) {
+    const normalized = email.toLowerCase().trim();
+    const user = await this.prisma.user.findUnique({ where: { email: normalized } });
+    // Same invalid-code error whether the email exists or the code is
+    // wrong - don't leak which one failed.
+    const invalid = () => new BadRequestException('Invalid or expired code');
+    if (!user) throw invalid();
+
+    const otp = await this.prisma.passwordResetOtp.findFirst({
+      where: { userId: user.id, consumedAt: null, expiresAt: { gt: new Date() } },
+      orderBy: { createdAt: 'desc' },
+    });
+    if (!otp) throw invalid();
+    if (otp.attempts >= AuthService.OTP_MAX_ATTEMPTS) throw invalid();
+
+    const matches = await argon2.verify(otp.codeHash, code);
+    if (!matches) {
+      await this.prisma.passwordResetOtp.update({
+        where: { id: otp.id },
+        data: { attempts: { increment: 1 } },
+      });
+      throw invalid();
+    }
+
+    await this.prisma.passwordResetOtp.update({
+      where: { id: otp.id },
+      data: { consumedAt: new Date() },
+    });
+
+    const resetToken = await this.jwt.signAsync(
+      { sub: user.id, purpose: 'password_reset' },
+      { secret: process.env.JWT_SECRET, expiresIn: '10m' },
+    );
+    return { resetToken };
+  }
+
+  // ─── Reset password (using the token from verifyOtp) ─────────────────────────
+
+  async resetPassword(resetToken: string, newPassword: string) {
+    let payload: { sub: string; purpose: string };
+    try {
+      payload = await this.jwt.verifyAsync(resetToken, { secret: process.env.JWT_SECRET });
+    } catch {
+      throw new BadRequestException('Invalid or expired reset session - please start again');
+    }
+    if (payload.purpose !== 'password_reset') {
+      throw new BadRequestException('Invalid or expired reset session - please start again');
+    }
+
+    const hash = await argon2.hash(newPassword);
+    await this.prisma.user.update({
+      where: { id: payload.sub },
+      data: { passwordHash: hash },
+    });
+
+    return { message: 'Password reset successfully' };
+  }
+
   // ─── Helpers ─────────────────────────────────────────────────────────────────
+
+  private firstName(fullName: string): string {
+    const first = (fullName ?? '').trim().split(/\s+/)[0] ?? '';
+    if (!first) return 'there';
+    return first.charAt(0).toUpperCase() + first.slice(1);
+  }
 
   async isTokenBlacklisted(jti: string): Promise<boolean> {
     const token = await this.prisma.blacklistedToken.findUnique({

@@ -88,6 +88,26 @@ model User {
   dailyActivities      DailyActivity[]
   competitionEntries   CompetitionParticipant[]
   rewardRedemptions    RewardRedemption[]
+  passwordResetOtps    PasswordResetOtp[]
+}
+
+/// A one-time password-reset code, emailed to the user. `codeHash` is
+/// hashed the same way as login passwords (argon2) - a 6-digit code has
+/// little entropy on its own, so `attempts` caps guesses and `expiresAt`
+/// bounds the window regardless.
+model PasswordResetOtp {
+  id         String    @id @default(cuid())
+  userId     String
+  codeHash   String
+  attempts   Int       @default(0)
+  expiresAt  DateTime
+  consumedAt DateTime?
+
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
 }
 
 /// A record of coins spent on a reward. The catalogue itself (title,
