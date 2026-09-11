@@ -4,6 +4,7 @@ import { ActivityService } from '../activity/activity.service';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { UpdateProfileDto } from './dto/update-profile.dto';
+import { CompleteChallengeDto } from './dto/complete-challenge.dto';
 
 @Controller('users')
 @UseGuards(JwtAuthGuard)
@@ -86,11 +87,8 @@ export class UsersController {
 
   // POST /users/complete-challenge
   @Post('complete-challenge')
-  async completeChallenge(
-    @CurrentUser() user: any,
-    @Body('correctAnswers') correctAnswers: number,
-  ) {
-    const result = await this.users.completeStarterChallenge(user.sub, correctAnswers);
+  async completeChallenge(@CurrentUser() user: any, @Body() dto: CompleteChallengeDto) {
+    const result = await this.users.completeStarterChallenge(user.sub, dto.answers);
     return {
       earnedCoins: result.earnedCoins,
       earnedXp: result.earnedXp,

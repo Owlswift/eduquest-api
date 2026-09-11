@@ -123,3 +123,47 @@ describe('UsersService.getSubjectProgress', () => {
     expect(prisma.subject.findMany).not.toHaveBeenCalled();
   });
 });
+
+describe('UsersService.completeStarterChallenge', () => {
+  let prisma: {
+    question: { findMany: jest.Mock };
+    user: { update: jest.Mock; count: jest.Mock };
+  };
+  let activity: { recordQuestions: jest.Mock; recordXp: jest.Mock };
+  let service: UsersService;
+
+  beforeEach(() => {
+    prisma = {
+      question: { findMany: jest.fn() },
+      user: { update: jest.fn(), count: jest.fn() },
+    };
+    activity = { recordQuestions: jest.fn(), recordXp: jest.fn() };
+    service = new UsersService(prisma as any, activity as any);
+  });
+
+  it('grades server-side from real correctAnswerId values', async () => {
+    prisma.question.findMany.mockResolvedValue([
+      { id: 'q1', correctAnswerId: 'a' },
+      { id: 'q2', correctAnswerId: 'b' },
+    ]);
+    prisma.user.update.mockResolvedValue({
+      id: 'u1',
+      coins: 20,
+      xp: 20,
+      questionsAnswered: 2,
+      badges: 1,
+    });
+    prisma.user.count.mockResolvedValue(10);
+
+    const result = await service.completeStarterChallenge('u1', [
+      { questionId: 'q1', selectedOptionId: 'a' }, // correct
+      { questionId: 'q2', selectedOptionId: 'x' }, // wrong
+    ]);
+
+    expect(result.correctAnswers).toBe(1);
+    expect(result.earnedCoins).toBe(10);
+    expect(result.earnedXp).toBe(10);
+    expect(result.questionsAnsweredInChallenge).toBe(2);
+    expect(activity.recordXp).toHaveBeenCalledWith('u1', 10);
+  });
+});

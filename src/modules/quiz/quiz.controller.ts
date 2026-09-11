@@ -3,6 +3,7 @@ import {
   Get,
   Post,
   Body,
+  Param,
   Query,
   UseGuards,
   ParseIntPipe,
@@ -14,6 +15,7 @@ import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { ClassLevel } from '@prisma/client';
 import { SubmitQuizDto } from './dto/submit-quiz.dto';
+import { CheckAnswerDto } from './dto/check-answer.dto';
 
 @ApiTags('quiz')
 @ApiBearerAuth('access-token')
@@ -30,6 +32,14 @@ export class QuizController {
     @Query('classLevel') classLevel: ClassLevel = ClassLevel.SS1,
   ) {
     return this.quiz.getRandomQuestions(subjectId, count, classLevel);
+  }
+
+  // POST /quiz/questions/:id/check — reveal correctness after answering,
+  // for screens that show immediate per-question feedback. Doesn't affect
+  // scoring (submit still grades independently).
+  @Post('questions/:id/check')
+  async checkAnswer(@Param('id') id: string, @Body() dto: CheckAnswerDto) {
+    return this.quiz.checkAnswer(id, dto.selectedOptionId);
   }
 
   // POST /quiz/submit

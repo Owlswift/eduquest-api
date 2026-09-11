@@ -127,10 +127,25 @@ export class UsersService {
 
   // ─── Complete starter challenge (coins based on correct answers) ──────────────
 
-  async completeStarterChallenge(userId: string, correctAnswers: number) {
+  async completeStarterChallenge(
+    userId: string,
+    answers: { questionId: string; selectedOptionId: string }[],
+  ) {
     const COINS_PER_CORRECT = 10;
     const XP_PER_CORRECT = 10;
-    const QUESTIONS_ANSWERED = 5;
+
+    // Grade server-side, same as the main quiz - don't trust a
+    // client-reported correctAnswers count.
+    const questions = await this.prisma.question.findMany({
+      where: { id: { in: answers.map((a) => a.questionId) } },
+      select: { id: true, correctAnswerId: true },
+    });
+    const correctById = new Map(questions.map((q) => [q.id, q.correctAnswerId]));
+
+    const questionsAnswered = answers.length;
+    const correctAnswers = answers.filter(
+      (a) => correctById.get(a.questionId) === a.selectedOptionId,
+    ).length;
 
     const earnedCoins = correctAnswers * COINS_PER_CORRECT;
     const earnedXp = correctAnswers * XP_PER_CORRECT;
@@ -143,7 +158,7 @@ export class UsersService {
       data: {
         coins: { increment: earnedCoins },
         xp: { increment: earnedXp },
-        questionsAnswered: { increment: QUESTIONS_ANSWERED },
+        questionsAnswered: { increment: questionsAnswered },
         badges: { increment: 1 }, // First Steps badge
       },
       select: {
@@ -155,7 +170,7 @@ export class UsersService {
       },
     });
 
-    await this.activity.recordQuestions(userId, QUESTIONS_ANSWERED);
+    await this.activity.recordQuestions(userId, questionsAnswered);
     await this.activity.recordXp(userId, earnedXp);
 
     // Calculate approximate rank (simplified — replace with real ranking query)
@@ -166,7 +181,7 @@ export class UsersService {
       ...user,
       earnedCoins,
       earnedXp,
-      questionsAnsweredInChallenge: QUESTIONS_ANSWERED,
+      questionsAnsweredInChallenge: questionsAnswered,
       correctAnswers,
       nationalRank,
       stateRank,

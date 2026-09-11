@@ -46,6 +46,28 @@ export class QuizService {
     }));
   }
 
+  // ─── POST /quiz/questions/:id/check ──────────────────────────────────────────
+
+  /** Reveals whether one already-answered question was right, for a
+   *  student who's just picked an option and wants immediate feedback
+   *  before moving on. Stateless - doesn't affect scoring, so it's safe
+   *  to call per-question without opening the same "read the correct
+   *  answer off the network before answering" hole that including
+   *  correctAnswerId in the question list would. */
+  async checkAnswer(questionId: string, selectedOptionId: string) {
+    const question = await this.prisma.question.findUnique({
+      where: { id: questionId },
+      select: { correctAnswerId: true, explanation: true },
+    });
+    if (!question) throw new NotFoundException('Question not found');
+
+    return {
+      correct: question.correctAnswerId === selectedOptionId,
+      correctOptionId: question.correctAnswerId,
+      explanation: question.explanation,
+    };
+  }
+
   // ─── POST /quiz/submit ──────────────────────────────────────────────────────
 
   async submitQuizResults(

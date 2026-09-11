@@ -50,6 +50,39 @@ describe('QuizService', () => {
     });
   });
 
+  describe('checkAnswer', () => {
+    it('reports correct for a matching option, without affecting scoring', async () => {
+      prisma.question.findMany.mockResolvedValue([]); // not used by this method
+      (prisma as any).question.findUnique = jest.fn().mockResolvedValue({
+        correctAnswerId: 'a',
+        explanation: 'because reasons',
+      });
+
+      const result = await service.checkAnswer('q1', 'a');
+
+      expect(result).toEqual({
+        correct: true,
+        correctOptionId: 'a',
+        explanation: 'because reasons',
+      });
+    });
+
+    it('reports incorrect for a non-matching option', async () => {
+      (prisma as any).question.findUnique = jest
+        .fn()
+        .mockResolvedValue({ correctAnswerId: 'a', explanation: null });
+
+      const result = await service.checkAnswer('q1', 'b');
+      expect(result.correct).toBe(false);
+      expect(result.correctOptionId).toBe('a');
+    });
+
+    it('throws for an unknown question', async () => {
+      (prisma as any).question.findUnique = jest.fn().mockResolvedValue(null);
+      await expect(service.checkAnswer('ghost', 'a')).rejects.toBeInstanceOf(NotFoundException);
+    });
+  });
+
   describe('submitQuizResults', () => {
     it('grades server-side from the real correctAnswerId, ignoring any client claim', async () => {
       prisma.question.findMany.mockResolvedValue([
