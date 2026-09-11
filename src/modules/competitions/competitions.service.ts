@@ -1,9 +1,13 @@
 import { Injectable, BadRequestException, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../../database/prisma.service';
+import { NotificationsService } from '../notifications/notifications.service';
 
 @Injectable()
 export class CompetitionsService {
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private prisma: PrismaService,
+    private notifications: NotificationsService,
+  ) {}
 
   private status(now: Date, startsAt: Date, endsAt: Date): 'upcoming' | 'ongoing' | 'ended' {
     if (now < startsAt) return 'upcoming';
@@ -51,6 +55,11 @@ export class CompetitionsService {
       throw new BadRequestException('This competition has already ended');
     }
 
+    const alreadyJoined = await this.prisma.competitionParticipant.findUnique({
+      where: { competitionId_userId: { competitionId, userId } },
+      select: { id: true },
+    });
+
     const user = await this.prisma.user.findUnique({
       where: { id: userId },
       select: { xp: true },
@@ -61,6 +70,16 @@ export class CompetitionsService {
       create: { competitionId, userId, xpAtJoin: user?.xp ?? 0 },
       update: {}, // already joined - no-op, idempotent
     });
+
+    if (!alreadyJoined) {
+      await this.notifications.notify(
+        userId,
+        'competition_joined',
+        '🏆 Competition joined!',
+        `You joined ${competition.title}. Good luck!`,
+        { competitionId },
+      );
+    }
 
     return { joined: true };
   }

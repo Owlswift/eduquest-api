@@ -12,7 +12,7 @@ describe('UsersService.getLeaderboard', () => {
       user: { findMany: jest.fn(), findUnique: jest.fn(), count: jest.fn() },
       dailyActivity: { groupBy: jest.fn() },
     };
-    service = new UsersService(prisma as any, {} as any);
+    service = new UsersService(prisma as any, {} as any, {} as any);
   });
 
 
@@ -93,7 +93,7 @@ describe('UsersService.getSubjectProgress', () => {
       studentMastery: { groupBy: jest.fn() },
       subject: { findMany: jest.fn() },
     };
-    service = new UsersService(prisma as any, {} as any);
+    service = new UsersService(prisma as any, {} as any, {} as any);
   });
 
   it('averages mastery per subject, sorted highest first', async () => {
@@ -130,6 +130,7 @@ describe('UsersService.completeStarterChallenge', () => {
     user: { update: jest.Mock; count: jest.Mock };
   };
   let activity: { recordQuestions: jest.Mock; recordXp: jest.Mock };
+  let notifications: { notify: jest.Mock };
   let service: UsersService;
 
   beforeEach(() => {
@@ -138,7 +139,8 @@ describe('UsersService.completeStarterChallenge', () => {
       user: { update: jest.fn(), count: jest.fn() },
     };
     activity = { recordQuestions: jest.fn(), recordXp: jest.fn() };
-    service = new UsersService(prisma as any, activity as any);
+    notifications = { notify: jest.fn() };
+    service = new UsersService(prisma as any, activity as any, notifications as any);
   });
 
   it('grades server-side from real correctAnswerId values', async () => {
@@ -165,5 +167,11 @@ describe('UsersService.completeStarterChallenge', () => {
     expect(result.earnedXp).toBe(10);
     expect(result.questionsAnsweredInChallenge).toBe(2);
     expect(activity.recordXp).toHaveBeenCalledWith('u1', 10);
+    expect(notifications.notify).toHaveBeenCalledWith(
+      'u1',
+      'badge_earned',
+      expect.any(String),
+      expect.any(String),
+    );
   });
 });

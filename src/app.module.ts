@@ -12,12 +12,16 @@ import { ActivityModule } from './modules/activity/activity.module';
 import { CompetitionsModule } from './modules/competitions/competitions.module';
 import { RewardsModule } from './modules/rewards/rewards.module';
 import { MailerModule } from './modules/mailer/mailer.module';
+import { PushModule } from './modules/push/push.module';
+import { NotificationsModule } from './modules/notifications/notifications.module';
 
 @Module({
   imports: [
     ConfigModule.forRoot({ isGlobal: true }),
     PrismaModule,
     MailerModule,
+    PushModule,
+    NotificationsModule,
     ActivityModule,
     HealthModule,
     AuthModule,

@@ -7,6 +7,7 @@ describe('RewardsService', () => {
     rewardRedemption: { create: jest.Mock; findMany: jest.Mock };
     $transaction: jest.Mock;
   };
+  let notifications: { notify: jest.Mock };
   let service: RewardsService;
 
   beforeEach(() => {
@@ -15,7 +16,8 @@ describe('RewardsService', () => {
       rewardRedemption: { create: jest.fn(), findMany: jest.fn() },
       $transaction: jest.fn(),
     };
-    service = new RewardsService(prisma as any);
+    notifications = { notify: jest.fn() };
+    service = new RewardsService(prisma as any, notifications as any);
   });
 
   describe('list', () => {
@@ -61,6 +63,13 @@ describe('RewardsService', () => {
 
       expect(result).toEqual({ redeemed: true, coins: 500 });
       expect(prisma.$transaction).toHaveBeenCalledTimes(1);
+      expect(notifications.notify).toHaveBeenCalledWith(
+        'u1',
+        'reward_redeemed',
+        expect.any(String),
+        expect.any(String),
+        { rewardId: 'airtime_500' },
+      );
     });
   });
 

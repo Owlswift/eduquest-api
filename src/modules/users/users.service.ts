@@ -1,6 +1,7 @@
 import { Injectable, ConflictException } from '@nestjs/common';
 import { PrismaService } from '../../database/prisma.service';
 import { ActivityService } from '../activity/activity.service';
+import { NotificationsService } from '../notifications/notifications.service';
 import { UpdateProfileDto } from './dto/update-profile.dto';
 
 @Injectable()
@@ -8,6 +9,7 @@ export class UsersService {
   constructor(
     private prisma: PrismaService,
     private activity: ActivityService,
+    private notifications: NotificationsService,
   ) {}
 
   // ─── Get profile ────────────────────────────────────────────────────────────
@@ -117,6 +119,12 @@ export class UsersService {
     });
 
     await this.activity.recordXp(userId, BONUS_XP);
+    await this.notifications.notify(
+      userId,
+      'welcome_bonus',
+      '🎉 Welcome bonus claimed!',
+      `You earned ${BONUS_COINS} coins and ${BONUS_XP} XP. Let's get started!`,
+    );
 
     return {
       ...user,
@@ -172,6 +180,12 @@ export class UsersService {
 
     await this.activity.recordQuestions(userId, questionsAnswered);
     await this.activity.recordXp(userId, earnedXp);
+    await this.notifications.notify(
+      userId,
+      'badge_earned',
+      '🏅 First Steps badge earned!',
+      `You got ${correctAnswers}/${questionsAnswered} right on your starter challenge.`,
+    );
 
     // Calculate approximate rank (simplified — replace with real ranking query)
     const nationalRank = Math.max(1, totalUsers - Math.floor(Math.random() * 100));

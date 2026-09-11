@@ -1,10 +1,14 @@
 import { Injectable, BadRequestException, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../../database/prisma.service';
+import { NotificationsService } from '../notifications/notifications.service';
 import { REWARDS_CATALOG } from './rewards.catalog';
 
 @Injectable()
 export class RewardsService {
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private prisma: PrismaService,
+    private notifications: NotificationsService,
+  ) {}
 
   // ─── GET /rewards ─────────────────────────────────────────────────────────
 
@@ -54,6 +58,14 @@ export class RewardsService {
         },
       }),
     ]);
+
+    await this.notifications.notify(
+      userId,
+      'reward_redeemed',
+      '🎁 Reward redeemed!',
+      `You redeemed ${reward.title} for ${reward.coinCost} coins.`,
+      { rewardId: reward.id },
+    );
 
     return { redeemed: true, coins: updatedUser.coins };
   }

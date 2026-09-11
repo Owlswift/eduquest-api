@@ -39,6 +39,7 @@
     "compression": "^1.8.1",
     "cookie-parser": "^1.4.7",
     "dotenv": "^17.4.2",
+    "firebase-admin": "^14.4.0",
     "google-auth-library": "^10.7.0",
     "helmet": "^8.2.0",
     "ioredis": "^5.11.1",

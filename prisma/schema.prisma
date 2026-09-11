@@ -89,6 +89,41 @@ model User {
   competitionEntries   CompetitionParticipant[]
   rewardRedemptions    RewardRedemption[]
   passwordResetOtps    PasswordResetOtp[]
+  notifications        Notification[]
+  deviceTokens         DeviceToken[]
+}
+
+/// An in-app notification - the bell icon's feed. Created on meaningful
+/// events (badge earned, reward redeemed, competition joined, ...) and
+/// optionally also pushed via [DeviceToken]s if any are registered.
+model Notification {
+  id        String   @id @default(cuid())
+  userId    String
+  type      String
+  title     String
+  body      String
+  data      Json?
+  read      Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+  @@index([userId, read])
+}
+
+/// A push token registered by one install of the app. A user can have
+/// several (multiple devices) - all get pushed to.
+model DeviceToken {
+  id        String   @id @default(cuid())
+  userId    String
+  token     String   @unique
+  platform  String // 'ios' | 'android'
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
 }
 
 /// A one-time password-reset code, emailed to the user. `codeHash` is
