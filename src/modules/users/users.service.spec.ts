@@ -13,6 +13,7 @@ describe('UsersService.getLeaderboard', () => {
     service = new UsersService(prisma as any, {} as any);
   });
 
+
   it('ranks the top rows and marks the current user', async () => {
     prisma.user.findMany.mockResolvedValue([
       { id: 'a', fullName: 'Aisha Bello', xp: 300 },
@@ -41,5 +42,48 @@ describe('UsersService.getLeaderboard', () => {
     expect(result.top).toEqual([]);
     expect(result.me).toBeNull();
     expect(prisma.user.count).not.toHaveBeenCalled();
+  });
+});
+
+describe('UsersService.getSubjectProgress', () => {
+  let prisma: {
+    studentMastery: { groupBy: jest.Mock };
+    subject: { findMany: jest.Mock };
+  };
+  let service: UsersService;
+
+  beforeEach(() => {
+    prisma = {
+      studentMastery: { groupBy: jest.fn() },
+      subject: { findMany: jest.fn() },
+    };
+    service = new UsersService(prisma as any, {} as any);
+  });
+
+  it('averages mastery per subject, sorted highest first', async () => {
+    prisma.studentMastery.groupBy.mockResolvedValue([
+      { subjectId: 'math', _avg: { masteryScore: 40 } },
+      { subjectId: 'english', _avg: { masteryScore: 75 } },
+    ]);
+    prisma.subject.findMany.mockResolvedValue([
+      { id: 'math', name: 'Mathematics' },
+      { id: 'english', name: 'English' },
+    ]);
+
+    const result = await service.getSubjectProgress('u1');
+
+    expect(result).toEqual([
+      { subjectId: 'english', subjectName: 'English', progress: 0.75 },
+      { subjectId: 'math', subjectName: 'Mathematics', progress: 0.4 },
+    ]);
+  });
+
+  it('returns an empty list when the student has never studied', async () => {
+    prisma.studentMastery.groupBy.mockResolvedValue([]);
+
+    const result = await service.getSubjectProgress('u1');
+
+    expect(result).toEqual([]);
+    expect(prisma.subject.findMany).not.toHaveBeenCalled();
   });
 });

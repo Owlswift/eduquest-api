@@ -213,4 +213,34 @@ export class UsersService {
 
     return { top, me: meEntry };
   }
+
+  // ─── Per-subject progress (for the Profile tab) ──────────────────────────────
+
+  /**
+   * Average tutor mastery score per subject the student has actually
+   * studied. Only subjects with at least one StudentMastery row are
+   * returned - no fabricated rows for subjects never touched.
+   */
+  async getSubjectProgress(userId: string) {
+    const rows = await this.prisma.studentMastery.groupBy({
+      by: ['subjectId'],
+      where: { userId },
+      _avg: { masteryScore: true },
+    });
+    if (rows.length === 0) return [];
+
+    const subjects = await this.prisma.subject.findMany({
+      where: { id: { in: rows.map((r) => r.subjectId) } },
+      select: { id: true, name: true },
+    });
+    const nameById = new Map(subjects.map((s) => [s.id, s.name]));
+
+    return rows
+      .map((r) => ({
+        subjectId: r.subjectId,
+        subjectName: nameById.get(r.subjectId) ?? r.subjectId,
+        progress: Math.round(r._avg.masteryScore ?? 0) / 100,
+      }))
+      .sort((a, b) => b.progress - a.progress);
+  }
 }

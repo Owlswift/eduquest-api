@@ -31,6 +31,11 @@ export class UsersController {
       maxXp: userData.maxXp,
       level: userData.level,
       streak: userData.streak,
+      badges: userData.badges,
+      certificates: userData.certificates,
+      questionsAnswered: userData.questionsAnswered,
+      accuracy: userData.accuracy,
+      timeSpent: userData.timeSpent,
     };
   }
 
@@ -44,6 +49,12 @@ export class UsersController {
   @Get('leaderboard')
   async getLeaderboard(@CurrentUser() user: any) {
     return this.users.getLeaderboard(user.sub);
+  }
+
+  // GET /users/subject-progress
+  @Get('subject-progress')
+  async getSubjectProgress(@CurrentUser() user: any) {
+    return this.users.getSubjectProgress(user.sub);
   }
 
   // PATCH /users/profile
