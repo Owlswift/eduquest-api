@@ -70,6 +70,19 @@ export class ActivityService {
     await this.recomputeStreak(userId);
   }
 
+  /** Record `amount` XP earned today - feeds the weekly/monthly
+   *  leaderboard windows. No-op for amount <= 0; doesn't touch the
+   *  streak (XP alone isn't "study activity" for streak purposes). */
+  async recordXp(userId: string, amount: number): Promise<void> {
+    if (!amount || amount <= 0) return;
+    const date = this.lagosDate();
+    await this.prisma.dailyActivity.upsert({
+      where: { userId_date: { userId, date } },
+      create: { userId, date, xpEarned: amount },
+      update: { xpEarned: { increment: amount } },
+    });
+  }
+
   /** Walk back from today counting consecutive active days and persist the
    *  result to `User.streak`. Today not yet being active doesn't break a
    *  streak - it just isn't counted until the student studies. */

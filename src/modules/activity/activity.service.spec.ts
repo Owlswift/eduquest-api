@@ -128,4 +128,24 @@ describe('ActivityService', () => {
       });
     });
   });
+
+  describe('recordXp', () => {
+    it('is a no-op for a non-positive amount', async () => {
+      await service.recordXp('u1', 0);
+      expect(prisma.dailyActivity.upsert).not.toHaveBeenCalled();
+    });
+
+    it("upserts today's xpEarned without touching the streak", async () => {
+      prisma.dailyActivity.upsert.mockResolvedValue({});
+
+      await service.recordXp('u1', 50);
+
+      expect(prisma.dailyActivity.upsert).toHaveBeenCalledTimes(1);
+      const arg = prisma.dailyActivity.upsert.mock.calls[0][0];
+      expect(arg.where.userId_date.userId).toBe('u1');
+      expect(arg.create.xpEarned).toBe(50);
+      expect(arg.update.xpEarned).toEqual({ increment: 50 });
+      expect(prisma.user.update).not.toHaveBeenCalled();
+    });
+  });
 });

@@ -76,8 +76,10 @@ export class QuizService {
       select: { id: true, coins: true, xp: true, questionsAnswered: true },
     });
 
-    // Count these toward today's study activity / streak.
+    // Count these toward today's study activity / streak, and today's XP
+    // toward the weekly/monthly leaderboard windows.
     await this.activity.recordQuestions(userId, dto.totalQuestions);
+    await this.activity.recordXp(userId, earnedXp);
 
     // Simple rank calculation — count users with more XP
     const [nationalRank, stateRank] = await Promise.all([

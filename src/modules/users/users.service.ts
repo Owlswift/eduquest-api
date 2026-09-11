@@ -116,6 +116,8 @@ export class UsersService {
       },
     });
 
+    await this.activity.recordXp(userId, BONUS_XP);
+
     return {
       ...user,
       bonusCoins: BONUS_COINS,
@@ -154,6 +156,7 @@ export class UsersService {
     });
 
     await this.activity.recordQuestions(userId, QUESTIONS_ANSWERED);
+    await this.activity.recordXp(userId, earnedXp);
 
     // Calculate approximate rank (simplified — replace with real ranking query)
     const nationalRank = Math.max(1, totalUsers - Math.floor(Math.random() * 100));
@@ -170,7 +173,8 @@ export class UsersService {
     };
   }
 
-  // ─── All-time leaderboard (ranked by total XP) ───────────────────────────────
+  // ─── Leaderboard (ranked by XP - all-time total, or earned within a
+  // weekly/monthly window via DailyActivity.xpEarned) ─────────────────────────
 
   private firstName(fullName: string): string {
     const first = (fullName ?? '').trim().split(/\s+/)[0] ?? '';
@@ -178,7 +182,16 @@ export class UsersService {
     return first.charAt(0).toUpperCase() + first.slice(1);
   }
 
-  async getLeaderboard(userId: string, limit = 20) {
+  async getLeaderboard(
+    userId: string,
+    limit = 20,
+    period: 'all' | 'weekly' | 'monthly' = 'all',
+  ) {
+    if (period === 'all') return this._leaderboardAllTime(userId, limit);
+    return this._leaderboardForWindow(userId, limit, period === 'weekly' ? 7 : 30);
+  }
+
+  private async _leaderboardAllTime(userId: string, limit: number) {
     const [rows, me] = await Promise.all([
       this.prisma.user.findMany({
         where: { role: 'STUDENT' },
@@ -208,6 +221,54 @@ export class UsersService {
         rank: ahead + 1,
         name: this.firstName(me.fullName),
         xp: me.xp,
+      };
+    }
+
+    return { top, me: meEntry };
+  }
+
+  /** Ranks by XP earned in the last `days` days (DailyActivity.xpEarned),
+   *  not lifetime total - a student who was inactive this window ranks at
+   *  the bottom (0) even with a high all-time total. Only students with
+   *  at least one active day in the window appear, since 0-XP students
+   *  can't be meaningfully ranked against each other. */
+  private async _leaderboardForWindow(userId: string, limit: number, days: number) {
+    const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
+
+    const grouped = await this.prisma.dailyActivity.groupBy({
+      by: ['userId'],
+      where: { date: { gte: since } },
+      _sum: { xpEarned: true },
+    });
+
+    const totals = grouped
+      .map((g) => ({ userId: g.userId, xp: g._sum.xpEarned ?? 0 }))
+      .filter((t) => t.xp > 0)
+      .sort((a, b) => b.xp - a.xp);
+
+    const topIds = totals.slice(0, limit).map((t) => t.userId);
+    const myTotal = totals.find((t) => t.userId === userId);
+
+    const users = await this.prisma.user.findMany({
+      where: { id: { in: [...new Set([...topIds, userId])] }, role: 'STUDENT' },
+      select: { id: true, fullName: true },
+    });
+    const nameById = new Map(users.map((u) => [u.id, this.firstName(u.fullName)]));
+
+    const top = totals.slice(0, limit).map((t, i) => ({
+      rank: i + 1,
+      name: nameById.get(t.userId) ?? 'Student',
+      xp: t.xp,
+      isMe: t.userId === userId,
+    }));
+
+    let meEntry: { rank: number; name: string; xp: number } | null = null;
+    if (myTotal) {
+      const ahead = totals.filter((t) => t.xp > myTotal.xp).length;
+      meEntry = {
+        rank: ahead + 1,
+        name: nameById.get(userId) ?? 'Student',
+        xp: myTotal.xp,
       };
     }
 

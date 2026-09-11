@@ -3,12 +3,14 @@ import { UsersService } from './users.service';
 describe('UsersService.getLeaderboard', () => {
   let prisma: {
     user: { findMany: jest.Mock; findUnique: jest.Mock; count: jest.Mock };
+    dailyActivity: { groupBy: jest.Mock };
   };
   let service: UsersService;
 
   beforeEach(() => {
     prisma = {
       user: { findMany: jest.fn(), findUnique: jest.fn(), count: jest.fn() },
+      dailyActivity: { groupBy: jest.fn() },
     };
     service = new UsersService(prisma as any, {} as any);
   });
@@ -42,6 +44,40 @@ describe('UsersService.getLeaderboard', () => {
     expect(result.top).toEqual([]);
     expect(result.me).toBeNull();
     expect(prisma.user.count).not.toHaveBeenCalled();
+  });
+
+  it('ranks a weekly window by XP earned in that window, not lifetime total', async () => {
+    prisma.dailyActivity.groupBy.mockResolvedValue([
+      { userId: 'a', _sum: { xpEarned: 90 } },
+      { userId: 'me', _sum: { xpEarned: 150 } },
+      { userId: 'idle', _sum: { xpEarned: 0 } }, // active row, but earned nothing
+    ]);
+    prisma.user.findMany.mockResolvedValue([
+      { id: 'a', fullName: 'Aisha Bello' },
+      { id: 'me', fullName: 'ola law' },
+    ]);
+
+    const result = await service.getLeaderboard('me', 20, 'weekly');
+
+    expect(result.top).toEqual([
+      { rank: 1, name: 'Ola', xp: 150, isMe: true },
+      { rank: 2, name: 'Aisha', xp: 90, isMe: false },
+    ]);
+    expect(result.me).toEqual({ rank: 1, name: 'Ola', xp: 150 });
+    // Zero-XP-in-window rows are excluded - they can't be meaningfully ranked.
+    expect(result.top.find((r) => r.name === 'Student')).toBeUndefined();
+  });
+
+  it('gives a null me entry for a monthly window when the user had no activity', async () => {
+    prisma.dailyActivity.groupBy.mockResolvedValue([
+      { userId: 'a', _sum: { xpEarned: 50 } },
+    ]);
+    prisma.user.findMany.mockResolvedValue([{ id: 'a', fullName: 'Aisha Bello' }]);
+
+    const result = await service.getLeaderboard('me', 20, 'monthly');
+
+    expect(result.me).toBeNull();
+    expect(result.top).toEqual([{ rank: 1, name: 'Aisha', xp: 50, isMe: false }]);
   });
 });
 

@@ -1,4 +1,4 @@
-import { Controller, Get, Patch, Post, Body, UseGuards, HttpCode, HttpStatus } from '@nestjs/common';
+import { Controller, Get, Patch, Post, Body, Query, UseGuards, HttpCode, HttpStatus } from '@nestjs/common';
 import { UsersService } from './users.service';
 import { ActivityService } from '../activity/activity.service';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
@@ -45,10 +45,13 @@ export class UsersController {
     return this.activity.getDailySummary(user.sub);
   }
 
-  // GET /users/leaderboard
+  // GET /users/leaderboard?period=all|weekly|monthly
   @Get('leaderboard')
-  async getLeaderboard(@CurrentUser() user: any) {
-    return this.users.getLeaderboard(user.sub);
+  async getLeaderboard(
+    @CurrentUser() user: any,
+    @Query('period') period?: 'all' | 'weekly' | 'monthly',
+  ) {
+    return this.users.getLeaderboard(user.sub, 20, period ?? 'all');
   }
 
   // GET /users/subject-progress

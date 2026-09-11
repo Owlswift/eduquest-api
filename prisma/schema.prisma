@@ -143,13 +143,16 @@ model CompetitionParticipant {
 
 /// One row per user per calendar day (Africa/Lagos), tracking how much
 /// studying happened that day. Backs the Learn screen's streak strip and
-/// "Today's Goal" card, and the user's `streak` counter.
+/// "Today's Goal" card, the user's `streak` counter, and weekly/monthly
+/// leaderboard periods (sum of `xpEarned` over the window - avoids a
+/// full XP-transaction ledger for something only leaderboards need).
 model DailyActivity {
   id                String   @id @default(cuid())
   userId            String
   date              DateTime @db.Date
   questionsAnswered Int      @default(0)
   lessonsStudied    Int      @default(0)
+  xpEarned          Int      @default(0)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
