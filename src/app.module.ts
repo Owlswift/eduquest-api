@@ -9,6 +9,7 @@ import { QuizModule } from './modules/quiz/quiz.module';
 import { CurriculumModule } from './modules/curriculum/curriculum.module';
 import { TutorModule } from './modules/tutor/tutor.module';
 import { ActivityModule } from './modules/activity/activity.module';
+import { CompetitionsModule } from './modules/competitions/competitions.module';
 
 @Module({
   imports: [
@@ -22,6 +23,7 @@ import { ActivityModule } from './modules/activity/activity.module';
     QuizModule,
     CurriculumModule,
     TutorModule,
+    CompetitionsModule,
   ],
 })
 export class AppModule {}

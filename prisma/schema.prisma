@@ -83,9 +83,44 @@ model User {
   createdAt    DateTime   @default(now())
   updatedAt    DateTime   @updatedAt
 
-  tutorSessions   TutorSession[]
-  studentMastery  StudentMastery[]
-  dailyActivities DailyActivity[]
+  tutorSessions        TutorSession[]
+  studentMastery       StudentMastery[]
+  dailyActivities      DailyActivity[]
+  competitionEntries   CompetitionParticipant[]
+}
+
+/// A time-boxed contest ranked by XP earned during its window. Curated/
+/// seeded data - there's no admin-authoring UI yet.
+model Competition {
+  id       String   @id @default(cuid())
+  title    String
+  subtitle String
+  prizes   Json // string[]
+  startsAt DateTime
+  endsAt   DateTime
+
+  createdAt DateTime @default(now())
+
+  participants CompetitionParticipant[]
+
+  @@index([startsAt, endsAt])
+}
+
+/// A student's entry in a competition. `xpAtJoin` snapshots the student's
+/// total XP the moment they join, so "XP earned in this competition" is
+/// just `currentXp - xpAtJoin` - no separate XP-transaction ledger needed.
+model CompetitionParticipant {
+  id            String   @id @default(cuid())
+  competitionId String
+  userId        String
+  xpAtJoin      Int      @default(0)
+  joinedAt      DateTime @default(now())
+
+  competition Competition @relation(fields: [competitionId], references: [id], onDelete: Cascade)
+  user        User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([competitionId, userId])
+  @@index([competitionId])
 }
 
 /// One row per user per calendar day (Africa/Lagos), tracking how much
