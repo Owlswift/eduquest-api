@@ -7,6 +7,7 @@ import {
 import { ClassLevel, LessonState, TutorMessageRole } from '@prisma/client';
 import { PrismaService } from '../../database/prisma.service';
 import { ActivityService } from '../activity/activity.service';
+import { CertificatesService } from '../certificates/certificates.service';
 import { TutorLlmService, TutorHistoryEntry } from './tutor-llm.service';
 import { TutorTurn } from './tutor-schema';
 import { VoiceSttService } from '../voice/voice-stt.service';
@@ -75,6 +76,7 @@ export class TutorService {
     private llm: TutorLlmService,
     private stt: VoiceSttService,
     private activity: ActivityService,
+    private certificates: CertificatesService,
   ) {}
 
   /** Records a lesson interaction toward today's study activity/streak,
@@ -556,6 +558,12 @@ export class TutorService {
       where: { id: masteryId },
       data: { masteryScore, weakAreas, lastStudiedAt: new Date() },
     });
+
+    // Best-effort - a certificate check failing should never break a
+    // lesson turn.
+    await this.certificates
+      .checkAndAward(mastery.userId, mastery.subjectId)
+      .catch(() => {});
   }
 
   private async _recentHistory(

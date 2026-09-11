@@ -1,4 +1,5 @@
-import { Injectable, ConflictException } from '@nestjs/common';
+import { Injectable, ConflictException, BadRequestException, UnauthorizedException } from '@nestjs/common';
+import * as argon2 from 'argon2';
 import { PrismaService } from '../../database/prisma.service';
 import { ActivityService } from '../activity/activity.service';
 import { NotificationsService } from '../notifications/notifications.service';
@@ -60,6 +61,8 @@ export class UsersService {
   async updateProfile(userId: string, dto: UpdateProfileDto) {
     const data: any = {};
 
+    if (dto.fullName) data.fullName = dto.fullName.toLowerCase().trim();
+    if (dto.phone) data.phone = dto.phone.toLowerCase().trim();
     if (dto.classLevel) data.classLevel = dto.classLevel;
     if (dto.state) data.state = dto.state;
     if (dto.subjects) data.subjects = JSON.stringify(dto.subjects);
@@ -70,6 +73,8 @@ export class UsersService {
         data,
         select: {
           id: true,
+          fullName: true,
+          phone: true,
           classLevel: true,
           state: true,
           interests: true,
@@ -95,6 +100,36 @@ export class UsersService {
       // Re-throw other errors
       throw error;
     }
+  }
+
+  // ─── Change password (while logged in) ───────────────────────────────────────
+
+  async changePassword(userId: string, currentPassword: string, newPassword: string) {
+    const user = await this.prisma.user.findUnique({ where: { id: userId } });
+    if (!user) throw new UnauthorizedException('Invalid credentials');
+
+    if (!user.passwordHash) {
+      throw new BadRequestException(
+        'This account uses Google Sign-In and has no password to change.',
+      );
+    }
+
+    const valid = await argon2.verify(user.passwordHash, currentPassword);
+    if (!valid) throw new UnauthorizedException('Current password is incorrect');
+
+    const hash = await argon2.hash(newPassword);
+    await this.prisma.user.update({ where: { id: userId }, data: { passwordHash: hash } });
+
+    return { message: 'Password changed successfully' };
+  }
+
+  // ─── Delete account ───────────────────────────────────────────────────────────
+
+  /** Hard delete - every owned row (sessions, mastery, activity, rewards,
+   *  notifications, ...) cascades via the schema's onDelete: Cascade. */
+  async deleteAccount(userId: string) {
+    await this.prisma.user.delete({ where: { id: userId } });
+    return { message: 'Account deleted' };
   }
 
   // ─── Claim welcome bonus (100 coins + 50 XP) ─────────────────────────────────

@@ -91,6 +91,23 @@ model User {
   passwordResetOtps    PasswordResetOtp[]
   notifications        Notification[]
   deviceTokens         DeviceToken[]
+  earnedCertificates   Certificate[]
+}
+
+/// Auto-awarded once a student's average StudentMastery score in a
+/// subject crosses a threshold across enough topics (see
+/// CertificatesService) - not admin-issued, no manual grant path yet.
+model Certificate {
+  id          String   @id @default(cuid())
+  userId      String
+  subjectId   String
+  subjectName String
+  createdAt   DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, subjectId])
+  @@index([userId])
 }
 
 /// An in-app notification - the bell icon's feed. Created on meaningful

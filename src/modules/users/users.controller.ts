@@ -1,10 +1,11 @@
-import { Controller, Get, Patch, Post, Body, Query, UseGuards, HttpCode, HttpStatus } from '@nestjs/common';
+import { Controller, Get, Patch, Post, Delete, Body, Query, UseGuards, HttpCode, HttpStatus } from '@nestjs/common';
 import { UsersService } from './users.service';
 import { ActivityService } from '../activity/activity.service';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { UpdateProfileDto } from './dto/update-profile.dto';
 import { CompleteChallengeDto } from './dto/complete-challenge.dto';
+import { ChangePasswordDto } from './dto/change-password.dto';
 
 @Controller('users')
 @UseGuards(JwtAuthGuard)
@@ -38,6 +39,18 @@ export class UsersController {
       accuracy: userData.accuracy,
       timeSpent: userData.timeSpent,
     };
+  }
+
+  // DELETE /users/me
+  @Delete('me')
+  async deleteAccount(@CurrentUser() user: any) {
+    return this.users.deleteAccount(user.sub);
+  }
+
+  // PATCH /users/change-password
+  @Patch('change-password')
+  async changePassword(@CurrentUser() user: any, @Body() dto: ChangePasswordDto) {
+    return this.users.changePassword(user.sub, dto.currentPassword, dto.newPassword);
   }
 
   // GET /users/daily-summary

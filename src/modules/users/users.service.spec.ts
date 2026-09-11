@@ -1,3 +1,5 @@
+import { BadRequestException, UnauthorizedException } from '@nestjs/common';
+import * as argon2 from 'argon2';
 import { UsersService } from './users.service';
 
 describe('UsersService.getLeaderboard', () => {
@@ -173,5 +175,58 @@ describe('UsersService.completeStarterChallenge', () => {
       expect.any(String),
       expect.any(String),
     );
+  });
+});
+
+describe('UsersService.changePassword', () => {
+  let prisma: { user: { findUnique: jest.Mock; update: jest.Mock } };
+  let service: UsersService;
+
+  beforeEach(() => {
+    prisma = { user: { findUnique: jest.fn(), update: jest.fn() } };
+    service = new UsersService(prisma as any, {} as any, {} as any);
+  });
+
+  it('changes the password when the current one is correct', async () => {
+    const currentHash = await argon2.hash('oldpass1');
+    prisma.user.findUnique.mockResolvedValue({ id: 'u1', passwordHash: currentHash });
+    prisma.user.update.mockResolvedValue({});
+
+    const result = await service.changePassword('u1', 'oldpass1', 'newpass1');
+
+    expect(result.message).toMatch(/changed successfully/);
+    const arg = prisma.user.update.mock.calls[0][0];
+    expect(arg.where).toEqual({ id: 'u1' });
+    expect(typeof arg.data.passwordHash).toBe('string');
+  });
+
+  it('rejects an incorrect current password', async () => {
+    const currentHash = await argon2.hash('oldpass1');
+    prisma.user.findUnique.mockResolvedValue({ id: 'u1', passwordHash: currentHash });
+
+    await expect(service.changePassword('u1', 'wrongpass', 'newpass1')).rejects.toBeInstanceOf(
+      UnauthorizedException,
+    );
+    expect(prisma.user.update).not.toHaveBeenCalled();
+  });
+
+  it('rejects for a Google-only account with no password set', async () => {
+    prisma.user.findUnique.mockResolvedValue({ id: 'u1', passwordHash: null });
+
+    await expect(service.changePassword('u1', 'anything', 'newpass1')).rejects.toBeInstanceOf(
+      BadRequestException,
+    );
+  });
+});
+
+describe('UsersService.deleteAccount', () => {
+  it('deletes the user row (cascades handle the rest)', async () => {
+    const prisma = { user: { delete: jest.fn().mockResolvedValue({}) } };
+    const service = new UsersService(prisma as any, {} as any, {} as any);
+
+    const result = await service.deleteAccount('u1');
+
+    expect(prisma.user.delete).toHaveBeenCalledWith({ where: { id: 'u1' } });
+    expect(result.message).toMatch(/deleted/);
   });
 });
