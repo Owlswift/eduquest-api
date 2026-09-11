@@ -87,6 +87,24 @@ model User {
   studentMastery       StudentMastery[]
   dailyActivities      DailyActivity[]
   competitionEntries   CompetitionParticipant[]
+  rewardRedemptions    RewardRedemption[]
+}
+
+/// A record of coins spent on a reward. The catalogue itself (title,
+/// cost) is a small fixed list in code, not a DB table - there's no
+/// admin-authoring UI for it yet, so nothing to look up.
+model RewardRedemption {
+  id       String @id @default(cuid())
+  userId   String
+  rewardId String
+  title    String
+  coinCost Int
+
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
 }
 
 /// A time-boxed contest ranked by XP earned during its window. Curated/

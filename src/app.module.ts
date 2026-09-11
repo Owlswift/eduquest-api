@@ -10,6 +10,7 @@ import { CurriculumModule } from './modules/curriculum/curriculum.module';
 import { TutorModule } from './modules/tutor/tutor.module';
 import { ActivityModule } from './modules/activity/activity.module';
 import { CompetitionsModule } from './modules/competitions/competitions.module';
+import { RewardsModule } from './modules/rewards/rewards.module';
 
 @Module({
   imports: [
@@ -24,6 +25,7 @@ import { CompetitionsModule } from './modules/competitions/competitions.module';
     CurriculumModule,
     TutorModule,
     CompetitionsModule,
+    RewardsModule,
   ],
 })
 export class AppModule {}
