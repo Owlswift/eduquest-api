@@ -109,7 +109,7 @@ export class QuizService {
           set: await this._newAccuracy(userId, correctAnswers, totalQuestions),
         },
       },
-      select: { id: true, coins: true, xp: true, questionsAnswered: true },
+      select: { id: true, coins: true, xp: true, questionsAnswered: true, state: true },
     });
 
     // Count these toward today's study activity / streak, and today's XP
@@ -117,14 +117,18 @@ export class QuizService {
     await this.activity.recordQuestions(userId, totalQuestions);
     await this.activity.recordXp(userId, earnedXp);
 
-    // Simple rank calculation — count users with more XP
-    const [nationalRank, stateRank] = await Promise.all([
-      this.prisma.user.count({ where: { xp: { gt: user.xp } } }).then((n) => n + 1),
-      // State rank approximation (replace with real state field query later)
-      this.prisma.user.count({ where: { xp: { gt: user.xp } } }).then((n) =>
-        Math.max(1, Math.floor((n + 1) * 0.08)),
-      ),
+    // Real ranks by XP - stateRank is null (not fabricated) if the
+    // student hasn't set a state, since there's nothing real to compare.
+    const [aheadNationally, aheadInState] = await Promise.all([
+      this.prisma.user.count({ where: { role: 'STUDENT', xp: { gt: user.xp } } }),
+      user.state
+        ? this.prisma.user.count({
+            where: { role: 'STUDENT', state: user.state, xp: { gt: user.xp } },
+          })
+        : Promise.resolve(null),
     ]);
+    const nationalRank = aheadNationally + 1;
+    const stateRank = aheadInState === null ? null : aheadInState + 1;
 
     return {
       earnedCoins,

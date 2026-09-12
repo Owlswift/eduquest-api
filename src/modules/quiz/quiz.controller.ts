@@ -12,8 +12,10 @@ import {
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { QuizService } from './quiz.service';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
+import { RolesGuard } from '../../common/guards/roles.guard';
+import { Roles } from '../../common/decorators/roles.decorator';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
-import { ClassLevel } from '@prisma/client';
+import { ClassLevel, UserRole } from '@prisma/client';
 import { SubmitQuizDto } from './dto/submit-quiz.dto';
 import { CheckAnswerDto } from './dto/check-answer.dto';
 
@@ -50,6 +52,8 @@ export class QuizController {
 
   // POST /quiz/seed — run once to populate questions
   @Post('seed')
+  @UseGuards(RolesGuard)
+  @Roles(UserRole.ADMIN)
   async seed() {
     return this.quiz.seedQuestions();
   }

@@ -193,9 +193,6 @@ export class UsersService {
     const earnedCoins = correctAnswers * COINS_PER_CORRECT;
     const earnedXp = correctAnswers * XP_PER_CORRECT;
 
-    // Get current user stats to calculate new rank placeholders
-    const totalUsers = await this.prisma.user.count();
-
     const user = await this.prisma.user.update({
       where: { id: userId },
       data: {
@@ -210,6 +207,7 @@ export class UsersService {
         xp: true,
         questionsAnswered: true,
         badges: true,
+        state: true,
       },
     });
 
@@ -222,9 +220,7 @@ export class UsersService {
       `You got ${correctAnswers}/${questionsAnswered} right on your starter challenge.`,
     );
 
-    // Calculate approximate rank (simplified — replace with real ranking query)
-    const nationalRank = Math.max(1, totalUsers - Math.floor(Math.random() * 100));
-    const stateRank = Math.max(1, Math.floor(totalUsers * 0.1) - Math.floor(Math.random() * 20));
+    const { nationalRank, stateRank } = await this._ranksFor(user.id, user.xp, user.state);
 
     return {
       ...user,
@@ -234,6 +230,22 @@ export class UsersService {
       correctAnswers,
       nationalRank,
       stateRank,
+    };
+  }
+
+  /** Real ranks by XP - not the Math.random() placeholders this used to
+   *  return. `stateRank` is null (not fabricated) if the student hasn't
+   *  set a state, since there's nothing real to rank them against. */
+  private async _ranksFor(userId: string, xp: number, state: string | null) {
+    const [aheadNationally, aheadInState] = await Promise.all([
+      this.prisma.user.count({ where: { role: 'STUDENT', xp: { gt: xp } } }),
+      state
+        ? this.prisma.user.count({ where: { role: 'STUDENT', state, xp: { gt: xp } } })
+        : Promise.resolve(null),
+    ]);
+    return {
+      nationalRank: aheadNationally + 1,
+      stateRank: aheadInState === null ? null : aheadInState + 1,
     };
   }
 

@@ -176,6 +176,53 @@ describe('UsersService.completeStarterChallenge', () => {
       expect.any(String),
     );
   });
+
+  it('computes real ranks by XP instead of the old Math.random() placeholders', async () => {
+    prisma.question.findMany.mockResolvedValue([{ id: 'q1', correctAnswerId: 'a' }]);
+    prisma.user.update.mockResolvedValue({
+      id: 'u1',
+      coins: 10,
+      xp: 100,
+      questionsAnswered: 1,
+      badges: 1,
+      state: 'Lagos',
+    });
+    // First count() call = national (STUDENT, xp > 100); second = same-state.
+    prisma.user.count.mockResolvedValueOnce(4).mockResolvedValueOnce(1);
+
+    const result = await service.completeStarterChallenge('u1', [
+      { questionId: 'q1', selectedOptionId: 'a' },
+    ]);
+
+    expect(result.nationalRank).toBe(5);
+    expect(result.stateRank).toBe(2);
+    expect(prisma.user.count).toHaveBeenNthCalledWith(1, {
+      where: { role: 'STUDENT', xp: { gt: 100 } },
+    });
+    expect(prisma.user.count).toHaveBeenNthCalledWith(2, {
+      where: { role: 'STUDENT', state: 'Lagos', xp: { gt: 100 } },
+    });
+  });
+
+  it('leaves stateRank null (not fabricated) when the student has no state set', async () => {
+    prisma.question.findMany.mockResolvedValue([{ id: 'q1', correctAnswerId: 'a' }]);
+    prisma.user.update.mockResolvedValue({
+      id: 'u1',
+      coins: 10,
+      xp: 50,
+      questionsAnswered: 1,
+      badges: 1,
+      state: null,
+    });
+    prisma.user.count.mockResolvedValue(2);
+
+    const result = await service.completeStarterChallenge('u1', [
+      { questionId: 'q1', selectedOptionId: 'a' },
+    ]);
+
+    expect(result.stateRank).toBeNull();
+    expect(prisma.user.count).toHaveBeenCalledTimes(1); // no state query at all
+  });
 });
 
 describe('UsersService.changePassword', () => {

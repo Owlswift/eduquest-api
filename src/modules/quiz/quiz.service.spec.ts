@@ -133,5 +133,56 @@ describe('QuizService', () => {
       expect(result.correctAnswers).toBe(0);
       expect(result.earnedCoins).toBe(0);
     });
+
+    it('computes real national/state ranks by XP instead of the old fake stateRank', async () => {
+      prisma.question.findMany.mockResolvedValue([{ id: 'q1', correctAnswerId: 'a' }]);
+      prisma.user.update.mockResolvedValue({
+        id: 'u1',
+        coins: 100,
+        xp: 100,
+        questionsAnswered: 1,
+        state: 'Lagos',
+      });
+      prisma.user.findUnique.mockResolvedValue({ accuracy: 0, questionsAnswered: 0 });
+      // First count() = national (STUDENT, xp > 100); second = same-state.
+      prisma.user.count.mockResolvedValueOnce(9).mockResolvedValueOnce(3);
+
+      const result = await service.submitQuizResults('u1', {
+        subjectId: 'math',
+        answers: [{ questionId: 'q1', selectedOptionId: 'a' }],
+        timeTaken: 10,
+      });
+
+      expect(result.nationalRank).toBe(10);
+      expect(result.stateRank).toBe(4);
+      expect(prisma.user.count).toHaveBeenNthCalledWith(1, {
+        where: { role: 'STUDENT', xp: { gt: 100 } },
+      });
+      expect(prisma.user.count).toHaveBeenNthCalledWith(2, {
+        where: { role: 'STUDENT', state: 'Lagos', xp: { gt: 100 } },
+      });
+    });
+
+    it('leaves stateRank null when the student has no state set', async () => {
+      prisma.question.findMany.mockResolvedValue([{ id: 'q1', correctAnswerId: 'a' }]);
+      prisma.user.update.mockResolvedValue({
+        id: 'u1',
+        coins: 0,
+        xp: 0,
+        questionsAnswered: 1,
+        state: null,
+      });
+      prisma.user.findUnique.mockResolvedValue({ accuracy: 0, questionsAnswered: 0 });
+      prisma.user.count.mockResolvedValue(0);
+
+      const result = await service.submitQuizResults('u1', {
+        subjectId: 'math',
+        answers: [{ questionId: 'q1', selectedOptionId: 'a' }],
+        timeTaken: 10,
+      });
+
+      expect(result.stateRank).toBeNull();
+      expect(prisma.user.count).toHaveBeenCalledTimes(1);
+    });
   });
 });
