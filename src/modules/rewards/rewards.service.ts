@@ -82,7 +82,93 @@ export class RewardsService {
       rewardId: r.rewardId,
       title: r.title,
       coinCost: r.coinCost,
+      status: r.status,
       redeemedAt: r.createdAt,
+      fulfilledAt: r.fulfilledAt,
     }));
+  }
+
+  // ─── Admin fulfillment queue ──────────────────────────────────────────────
+  // No vendor/payment integration - real-world delivery (airtime, data,
+  // etc.) is handled manually by whoever runs that; this just gives them a
+  // queue to work from instead of redemptions vanishing into a black hole.
+
+  async adminQueue() {
+    const redemptions = await this.prisma.rewardRedemption.findMany({
+      where: { status: 'PENDING' },
+      orderBy: { createdAt: 'asc' },
+      include: { user: { select: { fullName: true, email: true, phone: true } } },
+    });
+    return redemptions.map((r) => ({
+      id: r.id,
+      rewardId: r.rewardId,
+      title: r.title,
+      coinCost: r.coinCost,
+      redeemedAt: r.createdAt,
+      student: {
+        fullName: r.user.fullName,
+        email: r.user.email,
+        phone: r.user.phone,
+      },
+    }));
+  }
+
+  async adminFulfill(redemptionId: string) {
+    const redemption = await this.prisma.rewardRedemption.findUnique({
+      where: { id: redemptionId },
+    });
+    if (!redemption) throw new NotFoundException('Redemption not found');
+    if (redemption.status !== 'PENDING') {
+      throw new BadRequestException(`Redemption is already ${redemption.status.toLowerCase()}`);
+    }
+
+    await this.prisma.rewardRedemption.update({
+      where: { id: redemptionId },
+      data: { status: 'FULFILLED', fulfilledAt: new Date() },
+    });
+
+    await this.notifications.notify(
+      redemption.userId,
+      'reward_fulfilled',
+      '✅ Reward delivered!',
+      `Your ${redemption.title} has been sent.`,
+      { rewardId: redemption.rewardId },
+    );
+
+    return { fulfilled: true };
+  }
+
+  /** Couldn't actually deliver it (out of stock, bad phone number, etc.) -
+   *  refund the coins rather than leave the student having paid for
+   *  nothing. */
+  async adminReject(redemptionId: string, reason?: string) {
+    const redemption = await this.prisma.rewardRedemption.findUnique({
+      where: { id: redemptionId },
+    });
+    if (!redemption) throw new NotFoundException('Redemption not found');
+    if (redemption.status !== 'PENDING') {
+      throw new BadRequestException(`Redemption is already ${redemption.status.toLowerCase()}`);
+    }
+
+    await this.prisma.$transaction([
+      this.prisma.rewardRedemption.update({
+        where: { id: redemptionId },
+        data: { status: 'REJECTED', fulfilledAt: new Date() },
+      }),
+      this.prisma.user.update({
+        where: { id: redemption.userId },
+        data: { coins: { increment: redemption.coinCost } },
+      }),
+    ]);
+
+    await this.notifications.notify(
+      redemption.userId,
+      'reward_rejected',
+      '⚠️ Reward redemption failed',
+      `We couldn't deliver your ${redemption.title}${reason ? ` (${reason})` : ''} - your ${redemption.coinCost} coins have been refunded.`,
+      { rewardId: redemption.rewardId },
+    );
+
+    return { rejected: true, refunded: redemption.coinCost };
   }
 }

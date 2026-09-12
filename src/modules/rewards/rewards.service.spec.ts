@@ -4,7 +4,7 @@ import { RewardsService } from './rewards.service';
 describe('RewardsService', () => {
   let prisma: {
     user: { findUnique: jest.Mock; update: jest.Mock };
-    rewardRedemption: { create: jest.Mock; findMany: jest.Mock };
+    rewardRedemption: { create: jest.Mock; findMany: jest.Mock; findUnique: jest.Mock; update: jest.Mock };
     $transaction: jest.Mock;
   };
   let notifications: { notify: jest.Mock };
@@ -13,7 +13,12 @@ describe('RewardsService', () => {
   beforeEach(() => {
     prisma = {
       user: { findUnique: jest.fn(), update: jest.fn() },
-      rewardRedemption: { create: jest.fn(), findMany: jest.fn() },
+      rewardRedemption: {
+        create: jest.fn(),
+        findMany: jest.fn(),
+        findUnique: jest.fn(),
+        update: jest.fn(),
+      },
       $transaction: jest.fn(),
     };
     notifications = { notify: jest.fn() };
@@ -74,17 +79,128 @@ describe('RewardsService', () => {
   });
 
   describe('history', () => {
-    it('maps redemption rows to the response shape', async () => {
+    it('maps redemption rows to the response shape, including fulfillment status', async () => {
       const createdAt = new Date('2026-06-01');
       prisma.rewardRedemption.findMany.mockResolvedValue([
-        { id: 'r1', rewardId: 'airtime_500', title: 'Airtime', coinCost: 500, createdAt },
+        {
+          id: 'r1',
+          rewardId: 'airtime_500',
+          title: 'Airtime',
+          coinCost: 500,
+          status: 'PENDING',
+          createdAt,
+          fulfilledAt: null,
+        },
       ]);
 
       const result = await service.history('u1');
 
       expect(result).toEqual([
-        { id: 'r1', rewardId: 'airtime_500', title: 'Airtime', coinCost: 500, redeemedAt: createdAt },
+        {
+          id: 'r1',
+          rewardId: 'airtime_500',
+          title: 'Airtime',
+          coinCost: 500,
+          status: 'PENDING',
+          redeemedAt: createdAt,
+          fulfilledAt: null,
+        },
       ]);
+    });
+  });
+
+  describe('adminQueue', () => {
+    it('lists only pending redemptions with student contact info', async () => {
+      prisma.rewardRedemption.findMany.mockResolvedValue([
+        {
+          id: 'r1',
+          rewardId: 'airtime_500',
+          title: 'Airtime',
+          coinCost: 500,
+          createdAt: new Date('2026-06-01'),
+          user: { fullName: 'ola law', email: 'ola@x.com', phone: '080' },
+        },
+      ]);
+
+      const result = await service.adminQueue();
+
+      expect(prisma.rewardRedemption.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { status: 'PENDING' } }),
+      );
+      expect(result[0].student).toEqual({
+        fullName: 'ola law',
+        email: 'ola@x.com',
+        phone: '080',
+      });
+    });
+  });
+
+  describe('adminFulfill', () => {
+    it('marks a pending redemption fulfilled and notifies the student', async () => {
+      prisma.rewardRedemption.findUnique.mockResolvedValue({
+        id: 'r1',
+        userId: 'u1',
+        rewardId: 'airtime_500',
+        title: 'Airtime',
+        coinCost: 500,
+        status: 'PENDING',
+      });
+
+      const result = await service.adminFulfill('r1');
+
+      expect(result).toEqual({ fulfilled: true });
+      expect(prisma.rewardRedemption.update).toHaveBeenCalledWith({
+        where: { id: 'r1' },
+        data: { status: 'FULFILLED', fulfilledAt: expect.any(Date) },
+      });
+      expect(notifications.notify).toHaveBeenCalledWith(
+        'u1',
+        'reward_fulfilled',
+        expect.any(String),
+        expect.any(String),
+        { rewardId: 'airtime_500' },
+      );
+    });
+
+    it('throws for an unknown redemption', async () => {
+      prisma.rewardRedemption.findUnique.mockResolvedValue(null);
+      await expect(service.adminFulfill('ghost')).rejects.toBeInstanceOf(NotFoundException);
+    });
+
+    it('rejects fulfilling something already resolved', async () => {
+      prisma.rewardRedemption.findUnique.mockResolvedValue({ id: 'r1', status: 'FULFILLED' });
+      await expect(service.adminFulfill('r1')).rejects.toBeInstanceOf(BadRequestException);
+    });
+  });
+
+  describe('adminReject', () => {
+    it('marks rejected, refunds the coins, and notifies the student', async () => {
+      prisma.rewardRedemption.findUnique.mockResolvedValue({
+        id: 'r1',
+        userId: 'u1',
+        rewardId: 'airtime_500',
+        title: 'Airtime',
+        coinCost: 500,
+        status: 'PENDING',
+      });
+      prisma.$transaction.mockResolvedValue([{}, {}]);
+
+      const result = await service.adminReject('r1', 'out of stock');
+
+      expect(result).toEqual({ rejected: true, refunded: 500 });
+      expect(prisma.$transaction).toHaveBeenCalledTimes(1);
+      expect(notifications.notify).toHaveBeenCalledWith(
+        'u1',
+        'reward_rejected',
+        expect.any(String),
+        expect.stringContaining('out of stock'),
+        { rewardId: 'airtime_500' },
+      );
+    });
+
+    it('throws for an unknown redemption', async () => {
+      prisma.rewardRedemption.findUnique.mockResolvedValue(null);
+      await expect(service.adminReject('ghost')).rejects.toBeInstanceOf(NotFoundException);
     });
   });
 });

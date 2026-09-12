@@ -24,6 +24,15 @@ enum UserRole {
   ADMIN
 }
 
+/// Real-world fulfillment (actually sending the airtime/data/etc.) isn't
+/// automated - this is a manually-worked queue for whoever runs that,
+/// not a payment/vendor integration status.
+enum RedemptionStatus {
+  PENDING
+  FULFILLED
+  REJECTED
+}
+
 enum CurriculumImportStatus {
   UPLOADED
   EXTRACTING
@@ -166,17 +175,20 @@ model PasswordResetOtp {
 /// cost) is a small fixed list in code, not a DB table - there's no
 /// admin-authoring UI for it yet, so nothing to look up.
 model RewardRedemption {
-  id       String @id @default(cuid())
+  id       String           @id @default(cuid())
   userId   String
   rewardId String
   title    String
   coinCost Int
+  status   RedemptionStatus @default(PENDING)
 
-  createdAt DateTime @default(now())
+  createdAt   DateTime  @default(now())
+  fulfilledAt DateTime?
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId])
+  @@index([status])
 }
 
 /// A time-boxed contest ranked by XP earned during its window. Curated/
