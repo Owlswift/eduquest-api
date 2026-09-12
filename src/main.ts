@@ -7,6 +7,11 @@ import { LoggingInterceptor } from './common/interceptors/logging.interceptor';
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
 
+  // The admin dashboard (a separate web app) calls this API cross-origin -
+  // wide open since this is an internal tool on a local/private network,
+  // not a public-facing service.
+  app.enableCors();
+
   // Enable global validation for DTOs
   app.useGlobalPipes(
     new ValidationPipe({

@@ -15,6 +15,7 @@ import { MailerModule } from './modules/mailer/mailer.module';
 import { PushModule } from './modules/push/push.module';
 import { NotificationsModule } from './modules/notifications/notifications.module';
 import { CertificatesModule } from './modules/certificates/certificates.module';
+import { AdminModule } from './modules/admin/admin.module';
 
 @Module({
   imports: [
@@ -24,6 +25,7 @@ import { CertificatesModule } from './modules/certificates/certificates.module';
     PushModule,
     NotificationsModule,
     CertificatesModule,
+    AdminModule,
     ActivityModule,
     HealthModule,
     AuthModule,
