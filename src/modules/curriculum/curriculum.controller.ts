@@ -9,35 +9,41 @@ import {
   Post,
   Query,
   UploadedFile,
+  UseGuards,
   UseInterceptors,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import {
+  ApiBearerAuth,
   ApiBody,
   ApiConsumes,
   ApiOperation,
   ApiQuery,
   ApiTags,
 } from '@nestjs/swagger';
-import { ClassLevel, CurriculumImportStatus } from '@prisma/client';
+import { ClassLevel, CurriculumImportStatus, UserRole } from '@prisma/client';
 import { CurriculumService } from './curriculum.service';
 import { CreateImportDto } from './dto/create-import.dto';
-// Auth intentionally disabled on this controller - re-enable by restoring:
-//   import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
-//   import { RolesGuard } from '../../common/guards/roles.guard';
-//   import { Roles } from '../../common/decorators/roles.decorator';
-//   @ApiBearerAuth('access-token')
-//   @UseGuards(JwtAuthGuard, RolesGuard)
-//   @Roles(UserRole.ADMIN)
-// on the class below.
+import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
+import { RolesGuard } from '../../common/guards/roles.guard';
+import { Roles } from '../../common/decorators/roles.decorator';
 
+// Class-level guard only requires a valid login - GET /curriculum/topics is
+// student-facing (the mobile app's tutor feature reads it with a regular
+// student token). The actual authoring endpoints (upload/list-imports/
+// extract/review/approve) additionally require @Roles(UserRole.ADMIN) -
+// see each method below.
 @ApiTags('curriculum')
+@ApiBearerAuth('access-token')
+@UseGuards(JwtAuthGuard)
 @Controller('curriculum')
 export class CurriculumController {
   constructor(private curriculum: CurriculumService) {}
 
   // POST /curriculum/imports (multipart: file + subjectId + classLevel)
   @Post('imports')
+  @UseGuards(RolesGuard)
+  @Roles(UserRole.ADMIN)
   @ApiOperation({
     summary: 'Upload a curriculum PDF and extract its text, page by page',
   })
@@ -95,6 +101,8 @@ export class CurriculumController {
 
   // GET /curriculum/imports?subjectId=&status=
   @Get('imports')
+  @UseGuards(RolesGuard)
+  @Roles(UserRole.ADMIN)
   @ApiOperation({ summary: 'List curriculum imports' })
   @ApiQuery({ name: 'subjectId', required: false })
   @ApiQuery({ name: 'status', required: false, enum: CurriculumImportStatus })
@@ -107,6 +115,8 @@ export class CurriculumController {
 
   // GET /curriculum/imports/:id
   @Get('imports/:id')
+  @UseGuards(RolesGuard)
+  @Roles(UserRole.ADMIN)
   @ApiOperation({
     summary:
       'Get one curriculum import, including its raw pages and extracted JSON',
@@ -117,6 +127,8 @@ export class CurriculumController {
 
   // POST /curriculum/imports/:id/extract - runs the LLM extraction pass
   @Post('imports/:id/extract')
+  @UseGuards(RolesGuard)
+  @Roles(UserRole.ADMIN)
   @ApiOperation({
     summary:
       'Run the LLM extraction pass over every page of the import (can take minutes)',
@@ -127,6 +139,8 @@ export class CurriculumController {
 
   // PATCH /curriculum/imports/:id - admin overwrites the extracted JSON after review
   @Patch('imports/:id')
+  @UseGuards(RolesGuard)
+  @Roles(UserRole.ADMIN)
   @ApiOperation({ summary: 'Overwrite the extracted JSON after manual review' })
   @ApiBody({
     schema: {
@@ -144,6 +158,8 @@ export class CurriculumController {
 
   // POST /curriculum/imports/:id/approve - persists reviewed topics into CurriculumTopic
   @Post('imports/:id/approve')
+  @UseGuards(RolesGuard)
+  @Roles(UserRole.ADMIN)
   @ApiOperation({
     summary:
       'Approve the reviewed extraction, persisting it into CurriculumTopic',
