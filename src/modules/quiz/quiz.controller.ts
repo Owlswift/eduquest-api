@@ -36,6 +36,15 @@ export class QuizController {
     return this.quiz.getRandomQuestions(subjectId, count, classLevel);
   }
 
+  // GET /quiz/topics?subjectId=math&classLevel=SS1
+  @Get('topics')
+  async getTopics(
+    @Query('subjectId') subjectId: string,
+    @Query('classLevel') classLevel: ClassLevel = ClassLevel.SS1,
+  ) {
+    return this.quiz.getTopics(subjectId, classLevel);
+  }
+
   // POST /quiz/questions/:id/check — reveal correctness after answering,
   // for screens that show immediate per-question feedback. Doesn't affect
   // scoring (submit still grades independently).

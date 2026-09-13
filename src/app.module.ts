@@ -10,6 +10,7 @@ import { CurriculumModule } from './modules/curriculum/curriculum.module';
 import { TutorModule } from './modules/tutor/tutor.module';
 import { ActivityModule } from './modules/activity/activity.module';
 import { CompetitionsModule } from './modules/competitions/competitions.module';
+import { ChallengesModule } from './modules/challenges/challenges.module';
 import { RewardsModule } from './modules/rewards/rewards.module';
 import { MailerModule } from './modules/mailer/mailer.module';
 import { PushModule } from './modules/push/push.module';
@@ -35,6 +36,7 @@ import { AdminModule } from './modules/admin/admin.module';
     CurriculumModule,
     TutorModule,
     CompetitionsModule,
+    ChallengesModule,
     RewardsModule,
   ],
 })

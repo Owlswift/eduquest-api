@@ -277,3 +277,80 @@ describe('UsersService.deleteAccount', () => {
     expect(result.message).toMatch(/deleted/);
   });
 });
+
+describe('UsersService.searchStudents', () => {
+  let prisma: {
+    user: { findUnique: jest.Mock; findMany: jest.Mock };
+    challenge: { findMany: jest.Mock };
+  };
+  let service: UsersService;
+
+  beforeEach(() => {
+    prisma = {
+      user: { findUnique: jest.fn(), findMany: jest.fn() },
+      challenge: { findMany: jest.fn() },
+    };
+    service = new UsersService(prisma as any, {} as any, {} as any);
+  });
+
+  it('returns nothing for a query shorter than 2 characters', async () => {
+    const result = await service.searchStudents('me', 'a');
+    expect(result).toEqual([]);
+    expect(prisma.user.findMany).not.toHaveBeenCalled();
+  });
+
+  it('still returns a student in a different class level, but marks them ineligible', async () => {
+    prisma.user.findUnique.mockResolvedValue({ classLevel: 'SS1' });
+    prisma.user.findMany.mockResolvedValue([
+      { id: 'bola', username: 'bola', fullName: 'Bola Ade', avatarUrl: null, classLevel: 'SS3' },
+    ]);
+
+    const result = await service.searchStudents('me', 'bola');
+
+    expect(result).toEqual([
+      {
+        id: 'bola',
+        username: 'bola',
+        fullName: 'Bola Ade',
+        avatarUrl: null,
+        classLevel: 'SS3',
+        eligible: false,
+        ineligibleReason: 'In SS3, not your class level',
+      },
+    ]);
+  });
+
+  it('still returns a student the caller already has an open challenge with, but marks them ineligible', async () => {
+    prisma.user.findUnique.mockResolvedValue({ classLevel: 'SS1' });
+    prisma.user.findMany.mockResolvedValue([
+      { id: 'bola', username: 'bola', fullName: 'Bola Ade', avatarUrl: null, classLevel: 'SS1' },
+      { id: 'chidi', username: 'chidi', fullName: 'Chidi Okoro', avatarUrl: null, classLevel: 'SS1' },
+    ]);
+    prisma.challenge.findMany.mockResolvedValue([{ challengerId: 'me', opponentId: 'bola' }]);
+
+    const result = await service.searchStudents('me', 'oo', 'math');
+
+    expect(result.find((u) => u.id === 'bola')).toMatchObject({
+      eligible: false,
+      ineligibleReason: expect.stringContaining('open challenge'),
+    });
+    expect(result.find((u) => u.id === 'chidi')).toMatchObject({ eligible: true, ineligibleReason: null });
+  });
+
+  it('does not check for open challenges when no subjectId is given', async () => {
+    prisma.user.findUnique.mockResolvedValue({ classLevel: 'SS1' });
+    prisma.user.findMany.mockResolvedValue([
+      { id: 'bola', username: 'bola', fullName: 'Bola Ade', avatarUrl: null, classLevel: 'SS1' },
+    ]);
+
+    const result = await service.searchStudents('me', 'bola');
+
+    expect(result).toEqual([
+      {
+        id: 'bola', username: 'bola', fullName: 'Bola Ade', avatarUrl: null, classLevel: 'SS1',
+        eligible: true, ineligibleReason: null,
+      },
+    ]);
+    expect(prisma.challenge.findMany).not.toHaveBeenCalled();
+  });
+});

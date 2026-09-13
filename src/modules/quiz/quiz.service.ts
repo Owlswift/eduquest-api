@@ -46,6 +46,24 @@ export class QuizService {
     }));
   }
 
+  // ─── GET /quiz/topics ───────────────────────────────────────────────────────
+
+  /** Distinct topics tagged on a subject's question bank, with how many
+   *  questions exist for each - powers the Challenges topic picker.
+   *  Subjects that predate topic tagging (or a subject that just hasn't
+   *  been tagged yet) simply return an empty list. */
+  async getTopics(subjectId: string, classLevel: ClassLevel = ClassLevel.SS1) {
+    const rows = await this.prisma.question.groupBy({
+      by: ['topic'],
+      where: { subjectId, classLevel, topic: { not: null } },
+      _count: { _all: true },
+    });
+
+    return rows
+      .map((r) => ({ topic: r.topic as string, questionCount: r._count._all }))
+      .sort((a, b) => a.topic.localeCompare(b.topic));
+  }
+
   // ─── POST /quiz/questions/:id/check ──────────────────────────────────────────
 
   /** Reveals whether one already-answered question was right, for a
@@ -97,6 +115,24 @@ export class QuizService {
     const earnedCoins = correctAnswers * COINS_PER_CORRECT;
     const earnedXp = correctAnswers * XP_PER_CORRECT;
 
+    // Subject-specific accuracy, for Challenge matchmaking - separate
+    // from the global rolling `accuracy` below, since a student can be
+    // strong in one subject and weak in another.
+    await this.prisma.subjectStat.upsert({
+      where: { userId_subjectId: { userId, subjectId: dto.subjectId } },
+      create: {
+        userId,
+        subjectId: dto.subjectId,
+        questionsAnswered: totalQuestions,
+        correctAnswers,
+      },
+      update: {
+        questionsAnswered: { increment: totalQuestions },
+        correctAnswers: { increment: correctAnswers },
+        lastActiveAt: new Date(),
+      },
+    });
+
     // Update user stats atomically
     const user = await this.prisma.user.update({
       where: { id: userId },
@@ -147,6 +183,7 @@ export class QuizService {
   async seedQuestions() {
     const data = _seedData();
     let created = 0;
+    let updated = 0;
 
     // Ensure required subjects exist before seeding questions
     const requiredSubjectIds = [...new Set(data.map((q) => q.subjectId))];
@@ -160,13 +197,33 @@ export class QuizService {
 
     for (const q of data) {
       const exists = await this.prisma.question.findUnique({ where: { id: q.id } });
-      if (exists) continue;
+
+      if (exists) {
+        // Re-running seed also re-tags existing rows (e.g. adding `topic`
+        // to questions seeded before that field existed) - options aren't
+        // touched here since none of the seed data changes them.
+        await this.prisma.question.update({
+          where: { id: q.id },
+          data: {
+            subjectId: q.subjectId,
+            classLevel: q.classLevel as ClassLevel,
+            topic: q.topic ?? null,
+            questionText: q.questionText,
+            explanation: q.explanation,
+            difficulty: q.difficulty,
+            correctAnswerId: q.correctAnswerId,
+          },
+        });
+        updated++;
+        continue;
+      }
 
       await this.prisma.question.create({
         data: {
           id: q.id,
           subjectId: q.subjectId,
           classLevel: q.classLevel as ClassLevel,
+          topic: q.topic ?? null,
           questionText: q.questionText,
           explanation: q.explanation,
           difficulty: q.difficulty,
@@ -179,7 +236,7 @@ export class QuizService {
       created++;
     }
 
-    return { message: 'Questions seeded', created };
+    return { message: 'Questions seeded', created, updated };
   }
 
   // ─── Helpers ────────────────────────────────────────────────────────────────
@@ -206,9 +263,9 @@ export class QuizService {
 
 function _seedData() {
   return [
-    // ── Mathematics ──────────────────────────────────────────────────────────
+    // ── Mathematics — Algebra ────────────────────────────────────────────────
     {
-      id: 'math_ss1_q1', subjectId: 'math', classLevel: 'SS1', difficulty: 1,
+      id: 'math_ss1_q1', subjectId: 'math', classLevel: 'SS1', difficulty: 1, topic: 'Algebra',
       questionText: 'What is the value of x in the equation: 2x + 5 = 13?',
       correctAnswerId: 'math_ss1_q1_b',
       explanation: '2x = 13 - 5 = 8, so x = 4',
@@ -220,7 +277,7 @@ function _seedData() {
       ],
     },
     {
-      id: 'math_ss1_q2', subjectId: 'math', classLevel: 'SS1', difficulty: 1,
+      id: 'math_ss1_q2', subjectId: 'math', classLevel: 'SS1', difficulty: 1, topic: 'Algebra',
       questionText: 'Which of the following is a prime number?',
       correctAnswerId: 'math_ss1_q2_b',
       explanation: '17 is only divisible by 1 and itself',
@@ -232,7 +289,7 @@ function _seedData() {
       ],
     },
     {
-      id: 'math_ss1_q3', subjectId: 'math', classLevel: 'SS1', difficulty: 1,
+      id: 'math_ss1_q3', subjectId: 'math', classLevel: 'SS1', difficulty: 1, topic: 'Algebra',
       questionText: 'What is √144?',
       correctAnswerId: 'math_ss1_q3_c',
       explanation: '12 × 12 = 144',
@@ -244,7 +301,7 @@ function _seedData() {
       ],
     },
     {
-      id: 'math_ss1_q4', subjectId: 'math', classLevel: 'SS1', difficulty: 2,
+      id: 'math_ss1_q4', subjectId: 'math', classLevel: 'SS1', difficulty: 2, topic: 'Algebra',
       questionText: 'Solve: 3(x − 2) = 15',
       correctAnswerId: 'math_ss1_q4_c',
       explanation: 'x − 2 = 5, so x = 7',
@@ -256,7 +313,7 @@ function _seedData() {
       ],
     },
     {
-      id: 'math_ss1_q5', subjectId: 'math', classLevel: 'SS1', difficulty: 1,
+      id: 'math_ss1_q5', subjectId: 'math', classLevel: 'SS1', difficulty: 1, topic: 'Algebra',
       questionText: 'What is 15% of 200?',
       correctAnswerId: 'math_ss1_q5_b',
       explanation: '0.15 × 200 = 30',
@@ -268,7 +325,7 @@ function _seedData() {
       ],
     },
     {
-      id: 'math_ss1_q6', subjectId: 'math', classLevel: 'SS1', difficulty: 2,
+      id: 'math_ss1_q6', subjectId: 'math', classLevel: 'SS1', difficulty: 2, topic: 'Algebra',
       questionText: 'If y = 2x + 3, what is y when x = 4?',
       correctAnswerId: 'math_ss1_q6_d',
       explanation: 'y = 2(4) + 3 = 11',
@@ -280,19 +337,7 @@ function _seedData() {
       ],
     },
     {
-      id: 'math_ss1_q7', subjectId: 'math', classLevel: 'SS1', difficulty: 1,
-      questionText: 'Area of a rectangle with length 8cm and width 5cm?',
-      correctAnswerId: 'math_ss1_q7_c',
-      explanation: 'Area = 8 × 5 = 40 cm²',
-      options: [
-        { id: 'math_ss1_q7_a', text: '26 cm²' },
-        { id: 'math_ss1_q7_b', text: '36 cm²' },
-        { id: 'math_ss1_q7_c', text: '40 cm²' },
-        { id: 'math_ss1_q7_d', text: '48 cm²' },
-      ],
-    },
-    {
-      id: 'math_ss1_q8', subjectId: 'math', classLevel: 'SS1', difficulty: 1,
+      id: 'math_ss1_q8', subjectId: 'math', classLevel: 'SS1', difficulty: 1, topic: 'Algebra',
       questionText: 'Simplify: 4x + 3x − 2x',
       correctAnswerId: 'math_ss1_q8_b',
       explanation: '(4 + 3 − 2)x = 5x',
@@ -304,7 +349,7 @@ function _seedData() {
       ],
     },
     {
-      id: 'math_ss1_q9', subjectId: 'math', classLevel: 'SS1', difficulty: 3,
+      id: 'math_ss1_q9', subjectId: 'math', classLevel: 'SS1', difficulty: 3, topic: 'Algebra',
       questionText: 'Next in sequence: 2, 6, 18, 54, …?',
       correctAnswerId: 'math_ss1_q9_c',
       explanation: 'Each term × 3: 54 × 3 = 162',
@@ -316,7 +361,7 @@ function _seedData() {
       ],
     },
     {
-      id: 'math_ss1_q10', subjectId: 'math', classLevel: 'SS1', difficulty: 2,
+      id: 'math_ss1_q10', subjectId: 'math', classLevel: 'SS1', difficulty: 2, topic: 'Algebra',
       questionText: 'If a = 3 and b = 4, what is a² + b²?',
       correctAnswerId: 'math_ss1_q10_c',
       explanation: '9 + 16 = 25',
@@ -328,7 +373,7 @@ function _seedData() {
       ],
     },
     {
-      id: 'math_ss1_q11', subjectId: 'math', classLevel: 'SS1', difficulty: 1,
+      id: 'math_ss1_q11', subjectId: 'math', classLevel: 'SS1', difficulty: 1, topic: 'Algebra',
       questionText: 'What is 25% of 80?',
       correctAnswerId: 'math_ss1_q11_b',
       explanation: '0.25 × 80 = 20',
@@ -340,7 +385,7 @@ function _seedData() {
       ],
     },
     {
-      id: 'math_ss1_q12', subjectId: 'math', classLevel: 'SS1', difficulty: 2,
+      id: 'math_ss1_q12', subjectId: 'math', classLevel: 'SS1', difficulty: 2, topic: 'Algebra',
       questionText: 'Solve for x: 5x − 3 = 2x + 9',
       correctAnswerId: 'math_ss1_q12_c',
       explanation: '3x = 12, x = 4',
@@ -351,9 +396,499 @@ function _seedData() {
         { id: 'math_ss1_q12_d', text: '5' },
       ],
     },
+
+    // ── Mathematics — Quadratic Equations ───────────────────────────────────
+    {
+      id: 'math_quad_q1', subjectId: 'math', classLevel: 'SS1', difficulty: 2, topic: 'Quadratic Equations',
+      questionText: 'Solve: x² − 5x + 6 = 0',
+      correctAnswerId: 'math_quad_q1_a',
+      explanation: '(x − 2)(x − 3) = 0, so x = 2 or x = 3',
+      options: [
+        { id: 'math_quad_q1_a', text: 'x = 2 or x = 3' },
+        { id: 'math_quad_q1_b', text: 'x = 1 or x = 6' },
+        { id: 'math_quad_q1_c', text: 'x = −2 or x = −3' },
+        { id: 'math_quad_q1_d', text: 'x = 2 or x = −3' },
+      ],
+    },
+    {
+      id: 'math_quad_q2', subjectId: 'math', classLevel: 'SS1', difficulty: 1, topic: 'Quadratic Equations',
+      questionText: 'Solve: x² − 9 = 0',
+      correctAnswerId: 'math_quad_q2_b',
+      explanation: 'x² = 9, so x = 3 or x = −3',
+      options: [
+        { id: 'math_quad_q2_a', text: 'x = 9 or x = −9' },
+        { id: 'math_quad_q2_b', text: 'x = 3 or x = −3' },
+        { id: 'math_quad_q2_c', text: 'x = 3 only' },
+        { id: 'math_quad_q2_d', text: 'No solution' },
+      ],
+    },
+    {
+      id: 'math_quad_q3', subjectId: 'math', classLevel: 'SS1', difficulty: 2, topic: 'Quadratic Equations',
+      questionText: 'Solve: x² + 4x = 0',
+      correctAnswerId: 'math_quad_q3_c',
+      explanation: 'x(x + 4) = 0, so x = 0 or x = −4',
+      options: [
+        { id: 'math_quad_q3_a', text: 'x = 0 or x = 4' },
+        { id: 'math_quad_q3_b', text: 'x = 4 only' },
+        { id: 'math_quad_q3_c', text: 'x = 0 or x = −4' },
+        { id: 'math_quad_q3_d', text: 'No solution' },
+      ],
+    },
+    {
+      id: 'math_quad_q4', subjectId: 'math', classLevel: 'SS1', difficulty: 2, topic: 'Quadratic Equations',
+      questionText: 'What is the quadratic formula for ax² + bx + c = 0?',
+      correctAnswerId: 'math_quad_q4_a',
+      explanation: 'x = (−b ± √(b² − 4ac)) / 2a',
+      options: [
+        { id: 'math_quad_q4_a', text: 'x = (−b ± √(b² − 4ac)) / 2a' },
+        { id: 'math_quad_q4_b', text: 'x = (−b ± √(b² − 4ac)) / a' },
+        { id: 'math_quad_q4_c', text: 'x = (b ± √(b² − 4ac)) / 2a' },
+        { id: 'math_quad_q4_d', text: 'x = (−b ± √(b² + 4ac)) / 2a' },
+      ],
+    },
+    {
+      id: 'math_quad_q5', subjectId: 'math', classLevel: 'SS1', difficulty: 2, topic: 'Quadratic Equations',
+      questionText: 'Solve: x² − 7x + 12 = 0',
+      correctAnswerId: 'math_quad_q5_b',
+      explanation: '(x − 3)(x − 4) = 0, so x = 3 or x = 4',
+      options: [
+        { id: 'math_quad_q5_a', text: 'x = 3 or x = 5' },
+        { id: 'math_quad_q5_b', text: 'x = 3 or x = 4' },
+        { id: 'math_quad_q5_c', text: 'x = −3 or x = −4' },
+        { id: 'math_quad_q5_d', text: 'x = 12 or x = 1' },
+      ],
+    },
+    {
+      id: 'math_quad_q6', subjectId: 'math', classLevel: 'SS1', difficulty: 1, topic: 'Quadratic Equations',
+      questionText: 'If x² = 49, what is x?',
+      correctAnswerId: 'math_quad_q6_a',
+      explanation: 'x = 7 or x = −7',
+      options: [
+        { id: 'math_quad_q6_a', text: 'x = 7 or x = −7' },
+        { id: 'math_quad_q6_b', text: 'x = 7 only' },
+        { id: 'math_quad_q6_c', text: 'x = 24.5' },
+        { id: 'math_quad_q6_d', text: 'x = 14' },
+      ],
+    },
+    {
+      id: 'math_quad_q7', subjectId: 'math', classLevel: 'SS1', difficulty: 3, topic: 'Quadratic Equations',
+      questionText: 'Solve: x² − x − 6 = 0',
+      correctAnswerId: 'math_quad_q7_d',
+      explanation: '(x − 3)(x + 2) = 0, so x = 3 or x = −2',
+      options: [
+        { id: 'math_quad_q7_a', text: 'x = 2 or x = −3' },
+        { id: 'math_quad_q7_b', text: 'x = 6 or x = 1' },
+        { id: 'math_quad_q7_c', text: 'x = −3 or x = −2' },
+        { id: 'math_quad_q7_d', text: 'x = 3 or x = −2' },
+      ],
+    },
+    {
+      id: 'math_quad_q8', subjectId: 'math', classLevel: 'SS1', difficulty: 2, topic: 'Quadratic Equations',
+      questionText: 'Solve: 2x² − 8 = 0',
+      correctAnswerId: 'math_quad_q8_b',
+      explanation: 'x² = 4, so x = 2 or x = −2',
+      options: [
+        { id: 'math_quad_q8_a', text: 'x = 4 or x = −4' },
+        { id: 'math_quad_q8_b', text: 'x = 2 or x = −2' },
+        { id: 'math_quad_q8_c', text: 'x = 8 or x = −8' },
+        { id: 'math_quad_q8_d', text: 'x = 16' },
+      ],
+    },
+
+    // ── Mathematics — Geometry ───────────────────────────────────────────────
+    {
+      id: 'math_geo_q1', subjectId: 'math', classLevel: 'SS1', difficulty: 1, topic: 'Geometry',
+      questionText: 'Area of a rectangle with length 8cm and width 5cm?',
+      correctAnswerId: 'math_geo_q1_c',
+      explanation: 'Area = 8 × 5 = 40 cm²',
+      options: [
+        { id: 'math_geo_q1_a', text: '26 cm²' },
+        { id: 'math_geo_q1_b', text: '36 cm²' },
+        { id: 'math_geo_q1_c', text: '40 cm²' },
+        { id: 'math_geo_q1_d', text: '48 cm²' },
+      ],
+    },
+    {
+      id: 'math_geo_q2', subjectId: 'math', classLevel: 'SS1', difficulty: 1, topic: 'Geometry',
+      questionText: 'What is the perimeter of a square with side 6cm?',
+      correctAnswerId: 'math_geo_q2_c',
+      explanation: 'Perimeter = 4 × 6 = 24cm',
+      options: [
+        { id: 'math_geo_q2_a', text: '12 cm' },
+        { id: 'math_geo_q2_b', text: '18 cm' },
+        { id: 'math_geo_q2_c', text: '24 cm' },
+        { id: 'math_geo_q2_d', text: '36 cm' },
+      ],
+    },
+    {
+      id: 'math_geo_q3', subjectId: 'math', classLevel: 'SS1', difficulty: 1, topic: 'Geometry',
+      questionText: 'What is the sum of the interior angles of a triangle?',
+      correctAnswerId: 'math_geo_q3_b',
+      explanation: 'Always 180°',
+      options: [
+        { id: 'math_geo_q3_a', text: '90°' },
+        { id: 'math_geo_q3_b', text: '180°' },
+        { id: 'math_geo_q3_c', text: '270°' },
+        { id: 'math_geo_q3_d', text: '360°' },
+      ],
+    },
+    {
+      id: 'math_geo_q4', subjectId: 'math', classLevel: 'SS1', difficulty: 2, topic: 'Geometry',
+      questionText: 'A circle has radius 7cm. Find its circumference (π = 22/7).',
+      correctAnswerId: 'math_geo_q4_b',
+      explanation: 'C = 2 × 22/7 × 7 = 44cm',
+      options: [
+        { id: 'math_geo_q4_a', text: '22 cm' },
+        { id: 'math_geo_q4_b', text: '44 cm' },
+        { id: 'math_geo_q4_c', text: '154 cm' },
+        { id: 'math_geo_q4_d', text: '88 cm' },
+      ],
+    },
+    {
+      id: 'math_geo_q5', subjectId: 'math', classLevel: 'SS1', difficulty: 1, topic: 'Geometry',
+      questionText: 'Find the area of a triangle with base 10cm and height 6cm.',
+      correctAnswerId: 'math_geo_q5_a',
+      explanation: 'Area = ½ × 10 × 6 = 30 cm²',
+      options: [
+        { id: 'math_geo_q5_a', text: '30 cm²' },
+        { id: 'math_geo_q5_b', text: '60 cm²' },
+        { id: 'math_geo_q5_c', text: '16 cm²' },
+        { id: 'math_geo_q5_d', text: '36 cm²' },
+      ],
+    },
+    {
+      id: 'math_geo_q6', subjectId: 'math', classLevel: 'SS1', difficulty: 1, topic: 'Geometry',
+      questionText: 'How many sides does a hexagon have?',
+      correctAnswerId: 'math_geo_q6_c',
+      explanation: 'A hexagon has 6 sides',
+      options: [
+        { id: 'math_geo_q6_a', text: '5' },
+        { id: 'math_geo_q6_b', text: '7' },
+        { id: 'math_geo_q6_c', text: '6' },
+        { id: 'math_geo_q6_d', text: '8' },
+      ],
+    },
+    {
+      id: 'math_geo_q7', subjectId: 'math', classLevel: 'SS1', difficulty: 2, topic: 'Geometry',
+      questionText: 'What is the sum of the interior angles of a quadrilateral?',
+      correctAnswerId: 'math_geo_q7_d',
+      explanation: 'Always 360°',
+      options: [
+        { id: 'math_geo_q7_a', text: '90°' },
+        { id: 'math_geo_q7_b', text: '180°' },
+        { id: 'math_geo_q7_c', text: '270°' },
+        { id: 'math_geo_q7_d', text: '360°' },
+      ],
+    },
+    {
+      id: 'math_geo_q8', subjectId: 'math', classLevel: 'SS1', difficulty: 3, topic: 'Geometry',
+      questionText: 'A circle has radius 14cm. Find its area (π = 22/7).',
+      correctAnswerId: 'math_geo_q8_c',
+      explanation: 'Area = 22/7 × 14² = 616 cm²',
+      options: [
+        { id: 'math_geo_q8_a', text: '44 cm²' },
+        { id: 'math_geo_q8_b', text: '308 cm²' },
+        { id: 'math_geo_q8_c', text: '616 cm²' },
+        { id: 'math_geo_q8_d', text: '196 cm²' },
+      ],
+    },
+
+    // ── Mathematics — Trigonometry ───────────────────────────────────────────
+    {
+      id: 'math_trig_q1', subjectId: 'math', classLevel: 'SS1', difficulty: 1, topic: 'Trigonometry',
+      questionText: 'In a right-angled triangle, sine (sin θ) is defined as:',
+      correctAnswerId: 'math_trig_q1_a',
+      explanation: 'sin θ = Opposite / Hypotenuse',
+      options: [
+        { id: 'math_trig_q1_a', text: 'Opposite / Hypotenuse' },
+        { id: 'math_trig_q1_b', text: 'Adjacent / Hypotenuse' },
+        { id: 'math_trig_q1_c', text: 'Opposite / Adjacent' },
+        { id: 'math_trig_q1_d', text: 'Hypotenuse / Opposite' },
+      ],
+    },
+    {
+      id: 'math_trig_q2', subjectId: 'math', classLevel: 'SS1', difficulty: 1, topic: 'Trigonometry',
+      questionText: 'What is sin 30°?',
+      correctAnswerId: 'math_trig_q2_b',
+      explanation: 'sin 30° = 0.5',
+      options: [
+        { id: 'math_trig_q2_a', text: '0' },
+        { id: 'math_trig_q2_b', text: '0.5' },
+        { id: 'math_trig_q2_c', text: '1' },
+        { id: 'math_trig_q2_d', text: '0.87' },
+      ],
+    },
+    {
+      id: 'math_trig_q3', subjectId: 'math', classLevel: 'SS1', difficulty: 2, topic: 'Trigonometry',
+      questionText: 'What is cos 60°?',
+      correctAnswerId: 'math_trig_q3_b',
+      explanation: 'cos 60° = 0.5',
+      options: [
+        { id: 'math_trig_q3_a', text: '0' },
+        { id: 'math_trig_q3_b', text: '0.5' },
+        { id: 'math_trig_q3_c', text: '1' },
+        { id: 'math_trig_q3_d', text: '0.87' },
+      ],
+    },
+    {
+      id: 'math_trig_q4', subjectId: 'math', classLevel: 'SS1', difficulty: 1, topic: 'Trigonometry',
+      questionText: 'What is tan 45°?',
+      correctAnswerId: 'math_trig_q4_c',
+      explanation: 'tan 45° = 1',
+      options: [
+        { id: 'math_trig_q4_a', text: '0' },
+        { id: 'math_trig_q4_b', text: '0.5' },
+        { id: 'math_trig_q4_c', text: '1' },
+        { id: 'math_trig_q4_d', text: '2' },
+      ],
+    },
+    {
+      id: 'math_trig_q5', subjectId: 'math', classLevel: 'SS1', difficulty: 2, topic: 'Trigonometry',
+      questionText: 'In a right triangle, the opposite side = 3 and the hypotenuse = 5. What is sin θ?',
+      correctAnswerId: 'math_trig_q5_b',
+      explanation: 'sin θ = 3/5 = 0.6',
+      options: [
+        { id: 'math_trig_q5_a', text: '0.5' },
+        { id: 'math_trig_q5_b', text: '0.6' },
+        { id: 'math_trig_q5_c', text: '0.75' },
+        { id: 'math_trig_q5_d', text: '1.67' },
+      ],
+    },
+    {
+      id: 'math_trig_q6', subjectId: 'math', classLevel: 'SS1', difficulty: 1, topic: 'Trigonometry',
+      questionText: 'What is cos 0°?',
+      correctAnswerId: 'math_trig_q6_c',
+      explanation: 'cos 0° = 1',
+      options: [
+        { id: 'math_trig_q6_a', text: '0' },
+        { id: 'math_trig_q6_b', text: '0.5' },
+        { id: 'math_trig_q6_c', text: '1' },
+        { id: 'math_trig_q6_d', text: '−1' },
+      ],
+    },
+    {
+      id: 'math_trig_q7', subjectId: 'math', classLevel: 'SS1', difficulty: 1, topic: 'Trigonometry',
+      questionText: 'What is sin 90°?',
+      correctAnswerId: 'math_trig_q7_c',
+      explanation: 'sin 90° = 1',
+      options: [
+        { id: 'math_trig_q7_a', text: '0' },
+        { id: 'math_trig_q7_b', text: '0.5' },
+        { id: 'math_trig_q7_c', text: '1' },
+        { id: 'math_trig_q7_d', text: '0.87' },
+      ],
+    },
+    {
+      id: 'math_trig_q8', subjectId: 'math', classLevel: 'SS1', difficulty: 2, topic: 'Trigonometry',
+      questionText: 'In a right triangle, the adjacent side = 4 and the hypotenuse = 5. What is cos θ?',
+      correctAnswerId: 'math_trig_q8_c',
+      explanation: 'cos θ = 4/5 = 0.8',
+      options: [
+        { id: 'math_trig_q8_a', text: '0.6' },
+        { id: 'math_trig_q8_b', text: '0.75' },
+        { id: 'math_trig_q8_c', text: '0.8' },
+        { id: 'math_trig_q8_d', text: '1.25' },
+      ],
+    },
+
+    // ── Mathematics — Probability ────────────────────────────────────────────
+    {
+      id: 'math_prob_q1', subjectId: 'math', classLevel: 'SS1', difficulty: 1, topic: 'Probability',
+      questionText: 'A fair coin is tossed once. What is the probability of getting a head?',
+      correctAnswerId: 'math_prob_q1_b',
+      explanation: '1 favourable outcome out of 2 possible: 1/2',
+      options: [
+        { id: 'math_prob_q1_a', text: '1/4' },
+        { id: 'math_prob_q1_b', text: '1/2' },
+        { id: 'math_prob_q1_c', text: '1' },
+        { id: 'math_prob_q1_d', text: '0' },
+      ],
+    },
+    {
+      id: 'math_prob_q2', subjectId: 'math', classLevel: 'SS1', difficulty: 1, topic: 'Probability',
+      questionText: 'A die is rolled once. What is the probability of getting a 4?',
+      correctAnswerId: 'math_prob_q2_c',
+      explanation: '1 favourable outcome out of 6: 1/6',
+      options: [
+        { id: 'math_prob_q2_a', text: '1/2' },
+        { id: 'math_prob_q2_b', text: '1/3' },
+        { id: 'math_prob_q2_c', text: '1/6' },
+        { id: 'math_prob_q2_d', text: '1/4' },
+      ],
+    },
+    {
+      id: 'math_prob_q3', subjectId: 'math', classLevel: 'SS1', difficulty: 2, topic: 'Probability',
+      questionText: 'A bag contains 3 red and 2 blue balls. What is the probability of picking a red ball?',
+      correctAnswerId: 'math_prob_q3_a',
+      explanation: '3 red out of 5 total: 3/5',
+      options: [
+        { id: 'math_prob_q3_a', text: '3/5' },
+        { id: 'math_prob_q3_b', text: '2/5' },
+        { id: 'math_prob_q3_c', text: '3/2' },
+        { id: 'math_prob_q3_d', text: '1/5' },
+      ],
+    },
+    {
+      id: 'math_prob_q4', subjectId: 'math', classLevel: 'SS1', difficulty: 2, topic: 'Probability',
+      questionText: 'A die is rolled once. What is the probability of getting an even number?',
+      correctAnswerId: 'math_prob_q4_b',
+      explanation: '3 even numbers (2,4,6) out of 6: 1/2',
+      options: [
+        { id: 'math_prob_q4_a', text: '1/3' },
+        { id: 'math_prob_q4_b', text: '1/2' },
+        { id: 'math_prob_q4_c', text: '2/3' },
+        { id: 'math_prob_q4_d', text: '1/6' },
+      ],
+    },
+    {
+      id: 'math_prob_q5', subjectId: 'math', classLevel: 'SS1', difficulty: 3, topic: 'Probability',
+      questionText: 'A card is drawn from a standard deck of 52. What is the probability it is a King?',
+      correctAnswerId: 'math_prob_q5_c',
+      explanation: '4 Kings out of 52 cards: 4/52 = 1/13',
+      options: [
+        { id: 'math_prob_q5_a', text: '1/4' },
+        { id: 'math_prob_q5_b', text: '1/52' },
+        { id: 'math_prob_q5_c', text: '1/13' },
+        { id: 'math_prob_q5_d', text: '4/13' },
+      ],
+    },
+    {
+      id: 'math_prob_q6', subjectId: 'math', classLevel: 'SS1', difficulty: 2, topic: 'Probability',
+      questionText: 'Two fair coins are tossed. What is the probability of getting two heads?',
+      correctAnswerId: 'math_prob_q6_c',
+      explanation: 'Only 1 of 4 outcomes (HH, HT, TH, TT) is two heads: 1/4',
+      options: [
+        { id: 'math_prob_q6_a', text: '1/2' },
+        { id: 'math_prob_q6_b', text: '1/3' },
+        { id: 'math_prob_q6_c', text: '1/4' },
+        { id: 'math_prob_q6_d', text: '2/4' },
+      ],
+    },
+    {
+      id: 'math_prob_q7', subjectId: 'math', classLevel: 'SS1', difficulty: 2, topic: 'Probability',
+      questionText: 'A bag has 5 red, 3 blue and 2 green balls. What is the probability of picking blue?',
+      correctAnswerId: 'math_prob_q7_b',
+      explanation: '3 blue out of 10 total: 3/10',
+      options: [
+        { id: 'math_prob_q7_a', text: '1/5' },
+        { id: 'math_prob_q7_b', text: '3/10' },
+        { id: 'math_prob_q7_c', text: '1/2' },
+        { id: 'math_prob_q7_d', text: '3/5' },
+      ],
+    },
+    {
+      id: 'math_prob_q8', subjectId: 'math', classLevel: 'SS1', difficulty: 1, topic: 'Probability',
+      questionText: 'What is the probability of an impossible event?',
+      correctAnswerId: 'math_prob_q8_a',
+      explanation: 'An impossible event has probability 0',
+      options: [
+        { id: 'math_prob_q8_a', text: '0' },
+        { id: 'math_prob_q8_b', text: '1' },
+        { id: 'math_prob_q8_c', text: '0.5' },
+        { id: 'math_prob_q8_d', text: 'Undefined' },
+      ],
+    },
+
+    // ── Mathematics — Statistics ─────────────────────────────────────────────
+    {
+      id: 'math_stat_q1', subjectId: 'math', classLevel: 'SS1', difficulty: 1, topic: 'Statistics',
+      questionText: 'Find the mean of: 2, 4, 6, 8, 10',
+      correctAnswerId: 'math_stat_q1_b',
+      explanation: 'Sum = 30, 30 ÷ 5 = 6',
+      options: [
+        { id: 'math_stat_q1_a', text: '5' },
+        { id: 'math_stat_q1_b', text: '6' },
+        { id: 'math_stat_q1_c', text: '8' },
+        { id: 'math_stat_q1_d', text: '30' },
+      ],
+    },
+    {
+      id: 'math_stat_q2', subjectId: 'math', classLevel: 'SS1', difficulty: 1, topic: 'Statistics',
+      questionText: 'Find the median of: 3, 7, 9, 15, 20',
+      correctAnswerId: 'math_stat_q2_c',
+      explanation: 'The middle value of the ordered list is 9',
+      options: [
+        { id: 'math_stat_q2_a', text: '7' },
+        { id: 'math_stat_q2_b', text: '15' },
+        { id: 'math_stat_q2_c', text: '9' },
+        { id: 'math_stat_q2_d', text: '10.8' },
+      ],
+    },
+    {
+      id: 'math_stat_q3', subjectId: 'math', classLevel: 'SS1', difficulty: 1, topic: 'Statistics',
+      questionText: 'Find the mode of: 2, 3, 3, 5, 7, 3, 8',
+      correctAnswerId: 'math_stat_q3_a',
+      explanation: '3 appears most often (3 times)',
+      options: [
+        { id: 'math_stat_q3_a', text: '3' },
+        { id: 'math_stat_q3_b', text: '5' },
+        { id: 'math_stat_q3_c', text: '7' },
+        { id: 'math_stat_q3_d', text: '8' },
+      ],
+    },
+    {
+      id: 'math_stat_q4', subjectId: 'math', classLevel: 'SS1', difficulty: 2, topic: 'Statistics',
+      questionText: 'Find the range of: 4, 8, 15, 16, 23, 42',
+      correctAnswerId: 'math_stat_q4_c',
+      explanation: 'Range = highest − lowest = 42 − 4 = 38',
+      options: [
+        { id: 'math_stat_q4_a', text: '42' },
+        { id: 'math_stat_q4_b', text: '18' },
+        { id: 'math_stat_q4_c', text: '38' },
+        { id: 'math_stat_q4_d', text: '23' },
+      ],
+    },
+    {
+      id: 'math_stat_q5', subjectId: 'math', classLevel: 'SS1', difficulty: 1, topic: 'Statistics',
+      questionText: 'Find the mean of: 10, 20, 30',
+      correctAnswerId: 'math_stat_q5_b',
+      explanation: 'Sum = 60, 60 ÷ 3 = 20',
+      options: [
+        { id: 'math_stat_q5_a', text: '10' },
+        { id: 'math_stat_q5_b', text: '20' },
+        { id: 'math_stat_q5_c', text: '30' },
+        { id: 'math_stat_q5_d', text: '60' },
+      ],
+    },
+    {
+      id: 'math_stat_q6', subjectId: 'math', classLevel: 'SS1', difficulty: 2, topic: 'Statistics',
+      questionText: 'Find the median of: 2, 4, 6, 8',
+      correctAnswerId: 'math_stat_q6_b',
+      explanation: 'Even count - average the two middle values: (4 + 6) ÷ 2 = 5',
+      options: [
+        { id: 'math_stat_q6_a', text: '4' },
+        { id: 'math_stat_q6_b', text: '5' },
+        { id: 'math_stat_q6_c', text: '6' },
+        { id: 'math_stat_q6_d', text: '20' },
+      ],
+    },
+    {
+      id: 'math_stat_q7', subjectId: 'math', classLevel: 'SS1', difficulty: 1, topic: 'Statistics',
+      questionText: 'Find the mode of: 5, 5, 6, 7, 7, 7, 9',
+      correctAnswerId: 'math_stat_q7_c',
+      explanation: '7 appears most often (3 times)',
+      options: [
+        { id: 'math_stat_q7_a', text: '5' },
+        { id: 'math_stat_q7_b', text: '6' },
+        { id: 'math_stat_q7_c', text: '7' },
+        { id: 'math_stat_q7_d', text: '9' },
+      ],
+    },
+    {
+      id: 'math_stat_q8', subjectId: 'math', classLevel: 'SS1', difficulty: 2, topic: 'Statistics',
+      questionText: 'Find the range of: 12, 5, 18, 9, 21',
+      correctAnswerId: 'math_stat_q8_b',
+      explanation: 'Range = 21 − 5 = 16',
+      options: [
+        { id: 'math_stat_q8_a', text: '21' },
+        { id: 'math_stat_q8_b', text: '16' },
+        { id: 'math_stat_q8_c', text: '13' },
+        { id: 'math_stat_q8_d', text: '9' },
+      ],
+    },
     // ── English ───────────────────────────────────────────────────────────────
     {
-      id: 'english_ss1_q1', subjectId: 'english', classLevel: 'SS1', difficulty: 1,
+      id: 'english_ss1_q1', subjectId: 'english', classLevel: 'SS1', difficulty: 1, topic: 'Vocabulary',
       questionText: 'Choose the correct spelling:',
       correctAnswerId: 'english_ss1_q1_b',
       explanation: '"Necessary" is the correct spelling',
@@ -365,7 +900,7 @@ function _seedData() {
       ],
     },
     {
-      id: 'english_ss1_q2', subjectId: 'english', classLevel: 'SS1', difficulty: 1,
+      id: 'english_ss1_q2', subjectId: 'english', classLevel: 'SS1', difficulty: 1, topic: 'Grammar',
       questionText: 'What is the plural of "child"?',
       correctAnswerId: 'english_ss1_q2_c',
       explanation: '"Children" is the irregular plural of "child"',
@@ -377,7 +912,7 @@ function _seedData() {
       ],
     },
     {
-      id: 'english_ss1_q3', subjectId: 'english', classLevel: 'SS1', difficulty: 2,
+      id: 'english_ss1_q3', subjectId: 'english', classLevel: 'SS1', difficulty: 2, topic: 'Grammar',
       questionText: 'Identify the verb in: "The dog barked loudly."',
       correctAnswerId: 'english_ss1_q3_b',
       explanation: '"Barked" is the action verb in this sentence',
@@ -389,7 +924,7 @@ function _seedData() {
       ],
     },
     {
-      id: 'english_ss1_q4', subjectId: 'english', classLevel: 'SS1', difficulty: 2,
+      id: 'english_ss1_q4', subjectId: 'english', classLevel: 'SS1', difficulty: 2, topic: 'Grammar',
       questionText: 'Which sentence is grammatically correct?',
       correctAnswerId: 'english_ss1_q4_a',
       explanation: 'Subject-verb agreement: "She" takes "is"',
@@ -401,7 +936,7 @@ function _seedData() {
       ],
     },
     {
-      id: 'english_ss1_q5', subjectId: 'english', classLevel: 'SS1', difficulty: 1,
+      id: 'english_ss1_q5', subjectId: 'english', classLevel: 'SS1', difficulty: 1, topic: 'Vocabulary',
       questionText: 'What is a synonym for "happy"?',
       correctAnswerId: 'english_ss1_q5_c',
       explanation: '"Joyful" means feeling or expressing great happiness',
@@ -413,7 +948,7 @@ function _seedData() {
       ],
     },
     {
-      id: 'english_ss1_q6', subjectId: 'english', classLevel: 'SS1', difficulty: 2,
+      id: 'english_ss1_q6', subjectId: 'english', classLevel: 'SS1', difficulty: 2, topic: 'Vocabulary',
       questionText: 'The opposite of "ancient" is:',
       correctAnswerId: 'english_ss1_q6_b',
       explanation: '"Modern" means relating to present or recent times',
@@ -425,7 +960,7 @@ function _seedData() {
       ],
     },
     {
-      id: 'english_ss1_q7', subjectId: 'english', classLevel: 'SS1', difficulty: 1,
+      id: 'english_ss1_q7', subjectId: 'english', classLevel: 'SS1', difficulty: 1, topic: 'Grammar',
       questionText: 'Which word is an adjective in: "The tall man walked slowly"?',
       correctAnswerId: 'english_ss1_q7_b',
       explanation: '"Tall" describes the noun "man" — it\'s an adjective',
@@ -437,7 +972,7 @@ function _seedData() {
       ],
     },
     {
-      id: 'english_ss1_q8', subjectId: 'english', classLevel: 'SS1', difficulty: 3,
+      id: 'english_ss1_q8', subjectId: 'english', classLevel: 'SS1', difficulty: 3, topic: 'Literature',
       questionText: 'Identify the figure of speech: "The wind whispered through the trees."',
       correctAnswerId: 'english_ss1_q8_a',
       explanation: 'Giving human qualities (whispering) to a non-human (wind) is personification',
@@ -449,7 +984,7 @@ function _seedData() {
       ],
     },
     {
-      id: 'english_ss1_q9', subjectId: 'english', classLevel: 'SS1', difficulty: 2,
+      id: 'english_ss1_q9', subjectId: 'english', classLevel: 'SS1', difficulty: 2, topic: 'Grammar',
       questionText: '"She runs _____ than her brother." Fill in the blank:',
       correctAnswerId: 'english_ss1_q9_c',
       explanation: 'Comparative form of "fast" is "faster"',
@@ -461,7 +996,7 @@ function _seedData() {
       ],
     },
     {
-      id: 'english_ss1_q10', subjectId: 'english', classLevel: 'SS1', difficulty: 2,
+      id: 'english_ss1_q10', subjectId: 'english', classLevel: 'SS1', difficulty: 2, topic: 'Grammar',
       questionText: 'Which sentence uses the past tense correctly?',
       correctAnswerId: 'english_ss1_q10_b',
       explanation: '"Went" is the past tense of "go"',
@@ -474,7 +1009,7 @@ function _seedData() {
     },
     // ── Physics ───────────────────────────────────────────────────────────────
     {
-      id: 'physics_ss1_q1', subjectId: 'physics', classLevel: 'SS1', difficulty: 1,
+      id: 'physics_ss1_q1', subjectId: 'physics', classLevel: 'SS1', difficulty: 1, topic: 'Mechanics',
       questionText: 'What is the SI unit of force?',
       correctAnswerId: 'physics_ss1_q1_b',
       explanation: 'Force is measured in Newtons (N), named after Isaac Newton',
@@ -486,7 +1021,7 @@ function _seedData() {
       ],
     },
     {
-      id: 'physics_ss1_q2', subjectId: 'physics', classLevel: 'SS1', difficulty: 2,
+      id: 'physics_ss1_q2', subjectId: 'physics', classLevel: 'SS1', difficulty: 2, topic: 'Mechanics',
       questionText: 'A car travels 120km in 2 hours. What is its average speed?',
       correctAnswerId: 'physics_ss1_q2_c',
       explanation: 'Speed = Distance ÷ Time = 120 ÷ 2 = 60 km/h',
@@ -498,7 +1033,7 @@ function _seedData() {
       ],
     },
     {
-      id: 'physics_ss1_q3', subjectId: 'physics', classLevel: 'SS1', difficulty: 1,
+      id: 'physics_ss1_q3', subjectId: 'physics', classLevel: 'SS1', difficulty: 1, topic: 'Mechanics',
       questionText: 'Which of these is NOT a vector quantity?',
       correctAnswerId: 'physics_ss1_q3_d',
       explanation: 'Speed has magnitude only (no direction), so it is a scalar, not a vector',
@@ -510,7 +1045,7 @@ function _seedData() {
       ],
     },
     {
-      id: 'physics_ss1_q4', subjectId: 'physics', classLevel: 'SS1', difficulty: 2,
+      id: 'physics_ss1_q4', subjectId: 'physics', classLevel: 'SS1', difficulty: 2, topic: 'Mechanics',
       questionText: 'Newton\'s first law states that a body at rest will:',
       correctAnswerId: 'physics_ss1_q4_a',
       explanation: 'A body remains at rest unless acted upon by an external force (inertia)',
@@ -522,7 +1057,7 @@ function _seedData() {
       ],
     },
     {
-      id: 'physics_ss1_q5', subjectId: 'physics', classLevel: 'SS1', difficulty: 1,
+      id: 'physics_ss1_q5', subjectId: 'physics', classLevel: 'SS1', difficulty: 1, topic: 'Electricity',
       questionText: 'What is the unit of electrical current?',
       correctAnswerId: 'physics_ss1_q5_b',
       explanation: 'Electrical current is measured in Amperes (A)',
@@ -534,7 +1069,7 @@ function _seedData() {
       ],
     },
     {
-      id: 'physics_ss1_q6', subjectId: 'physics', classLevel: 'SS1', difficulty: 2,
+      id: 'physics_ss1_q6', subjectId: 'physics', classLevel: 'SS1', difficulty: 2, topic: 'Pressure',
       questionText: 'What happens to pressure when depth in a liquid increases?',
       correctAnswerId: 'physics_ss1_q6_a',
       explanation: 'Pressure increases with depth: P = ρgh',
@@ -546,7 +1081,7 @@ function _seedData() {
       ],
     },
     {
-      id: 'physics_ss1_q7', subjectId: 'physics', classLevel: 'SS1', difficulty: 1,
+      id: 'physics_ss1_q7', subjectId: 'physics', classLevel: 'SS1', difficulty: 1, topic: 'Energy',
       questionText: 'Which form of energy does a moving car possess?',
       correctAnswerId: 'physics_ss1_q7_b',
       explanation: 'A moving object has kinetic energy due to its motion',
@@ -558,7 +1093,7 @@ function _seedData() {
       ],
     },
     {
-      id: 'physics_ss1_q8', subjectId: 'physics', classLevel: 'SS1', difficulty: 2,
+      id: 'physics_ss1_q8', subjectId: 'physics', classLevel: 'SS1', difficulty: 2, topic: 'Waves',
       questionText: 'What is the relationship between frequency and wavelength?',
       correctAnswerId: 'physics_ss1_q8_c',
       explanation: 'As frequency increases, wavelength decreases (they are inversely proportional)',
@@ -570,7 +1105,7 @@ function _seedData() {
       ],
     },
     {
-      id: 'physics_ss1_q9', subjectId: 'physics', classLevel: 'SS1', difficulty: 1,
+      id: 'physics_ss1_q9', subjectId: 'physics', classLevel: 'SS1', difficulty: 1, topic: 'Pressure',
       questionText: 'What instrument measures atmospheric pressure?',
       correctAnswerId: 'physics_ss1_q9_a',
       explanation: 'A barometer measures atmospheric pressure',
@@ -582,7 +1117,7 @@ function _seedData() {
       ],
     },
     {
-      id: 'physics_ss1_q10', subjectId: 'physics', classLevel: 'SS1', difficulty: 3,
+      id: 'physics_ss1_q10', subjectId: 'physics', classLevel: 'SS1', difficulty: 3, topic: 'Energy',
       questionText: 'An object of mass 5kg is lifted 3m high. What is its potential energy? (g = 10 m/s²)',
       correctAnswerId: 'physics_ss1_q10_b',
       explanation: 'PE = mgh = 5 × 10 × 3 = 150 J',

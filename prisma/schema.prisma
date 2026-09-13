@@ -33,6 +33,18 @@ enum RedemptionStatus {
   REJECTED
 }
 
+/// Lifecycle of a Challenge (see the Challenge model): PENDING until the
+/// opponent picks their own topics and the combined question pool is
+/// generated, then ACTIVE while either player still has questions left
+/// to answer, then COMPLETED once both have submitted. DECLINED is a
+/// dead end the opponent can choose instead of responding.
+enum ChallengeStatus {
+  PENDING
+  DECLINED
+  ACTIVE
+  COMPLETED
+}
+
 enum CurriculumImportStatus {
   UPLOADED
   EXTRACTING
@@ -101,6 +113,9 @@ model User {
   notifications        Notification[]
   deviceTokens         DeviceToken[]
   earnedCertificates   Certificate[]
+  challengesSent       Challenge[]              @relation("ChallengesSent")
+  challengesReceived   Challenge[]              @relation("ChallengesReceived")
+  subjectStats         SubjectStat[]
 }
 
 /// Auto-awarded once a student's average StudentMastery score in a
@@ -267,9 +282,11 @@ model Subject {
   createdAt    DateTime   @default(now())
 
   questions        Question[]
+  theoryQuestions  TheoryQuestion[]
   curriculumImports CurriculumImport[]
   curriculumTopics  CurriculumTopic[]
   tutorSessions     TutorSession[]
+  challenges        Challenge[]
 }
 
 model CurriculumImport {
@@ -385,10 +402,24 @@ model Question {
   id              String         @id @default(cuid())
   subjectId       String
   classLevel      ClassLevel
+  /// A human-readable topic name within the subject (e.g. "Algebra",
+  /// "Quadratic Equations") - freeform, not a foreign key into
+  /// CurriculumTopic (that table is keyed to imported curriculum PDFs and
+  /// doesn't cover every subject; this is independently tagged on the
+  /// question bank so Challenges can select/weight by topic). Nullable
+  /// for now since older seeded questions predate this field.
+  topic           String?
   questionText    String
   explanation     String?
   difficulty      Int            @default(1)
   correctAnswerId String
+
+  /// The exam body this question was sourced from (WAEC/JAMB/NECO past
+  /// question), when known. Null for hand-authored/AI-generated questions
+  /// with no exam provenance.
+  examType        ExamType?
+  /// The year the source exam was sat, when known.
+  examYear        Int?
 
   subject         Subject        @relation(fields: [subjectId], references: [id], onDelete: Cascade)
   options         AnswerOption[]
@@ -396,6 +427,89 @@ model Question {
   createdAt       DateTime       @default(now())
 
   @@index([subjectId, classLevel])
+  @@index([subjectId, topic])
+  @@index([subjectId, examType, examYear])
+}
+
+/// An async 1v1 "Challenges" match: player A picks topics within a
+/// subject, player B (independently) picks their own topics, and
+/// EduQuest builds one combined question set weighted toward topics
+/// both chose. Both players see the same questions but each gets their
+/// own randomized option order (`challengerOptionOrder` /
+/// `opponentOptionOrder`), so neither can just tell the other "it's
+/// option B". Players don't need to be online together - either can
+/// answer whenever once the challenge is ACTIVE, and results are only
+/// revealed once both have submitted.
+model Challenge {
+  id         String          @id @default(cuid())
+  subjectId  String
+  classLevel ClassLevel
+
+  challengerId String
+  opponentId   String
+
+  /// string[] of topic names the challenger picked when creating this.
+  challengerTopics Json
+  /// string[] of topic names the opponent picked - null until they
+  /// respond (PENDING -> ACTIVE transition).
+  opponentTopics   Json?
+
+  status ChallengeStatus @default(PENDING)
+
+  /// string[] of Question ids - the frozen, weighted-and-shuffled pool
+  /// both players answer. Set once, when the challenge goes ACTIVE.
+  questionIds String[]
+
+  /// { [questionId]: string[] } - that question's AnswerOption ids in
+  /// the order shown to this player. Independently randomized per
+  /// player per question.
+  challengerOptionOrder Json?
+  opponentOptionOrder   Json?
+
+  /// { [questionId]: selectedOptionId } - only ever written by grading
+  /// the submission server-side; never trusted from a client-reported
+  /// score.
+  challengerAnswers Json?
+  opponentAnswers   Json?
+
+  challengerScore Int?
+  opponentScore   Int?
+
+  challengerCompletedAt DateTime?
+  opponentCompletedAt   DateTime?
+
+  createdAt   DateTime  @default(now())
+  respondedAt DateTime?
+  completedAt DateTime?
+
+  subject    Subject @relation(fields: [subjectId], references: [id], onDelete: Cascade)
+  challenger User    @relation("ChallengesSent", fields: [challengerId], references: [id], onDelete: Cascade)
+  opponent   User    @relation("ChallengesReceived", fields: [opponentId], references: [id], onDelete: Cascade)
+
+  @@index([challengerId, status])
+  @@index([opponentId, status])
+}
+
+/// A student's running accuracy in one subject, updated on every graded
+/// answer batch (a regular quiz submission or a Challenge submission).
+/// Distinct from `User.accuracy` (a single global rolling number across
+/// every subject) - this is what Challenge matchmaking uses to find
+/// opponents of similar *subject-specific* ability, since someone can be
+/// strong in one subject and weak in another regardless of overall
+/// level.
+model SubjectStat {
+  id                String   @id @default(cuid())
+  userId            String
+  subjectId         String
+  questionsAnswered Int      @default(0)
+  correctAnswers    Int      @default(0)
+  lastActiveAt      DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, subjectId])
+  @@index([subjectId])
 }
 
 model AnswerOption {
@@ -404,4 +518,37 @@ model AnswerOption {
   text       String
 
   question   Question @relation(fields: [questionId], references: [id], onDelete: Cascade)
+}
+
+/// Essay/theory-style past exam questions (e.g. WAEC Paper 2), as opposed to
+/// the multiple-choice bank in Question. These have no discrete correct
+/// option - instead they carry the chief examiner's own commentary
+/// (observation/generalComments/weaknessesRemedies/strengths), which is
+/// useful as grading rubric context for an AI grader assessing a student's
+/// free-text response, not as a single "correct answer".
+model TheoryQuestion {
+  id                 String     @id @default(cuid())
+  subjectId          String
+  classLevel         ClassLevel @default(SS3)
+  topic              String?
+  questionText       String
+
+  examType           ExamType?
+  examYear           Int?
+  /// Free-text paper label as published by the exam body (e.g. "Paper 2"),
+  /// not always present depending on source template.
+  paper              String?
+
+  observation        String?
+  generalComments    String?
+  weaknessesRemedies String?
+  strengths          String?
+  imageUrls          String[]   @default([])
+
+  subject            Subject    @relation(fields: [subjectId], references: [id], onDelete: Cascade)
+
+  createdAt          DateTime   @default(now())
+
+  @@index([subjectId, classLevel])
+  @@index([subjectId, examType, examYear])
 }

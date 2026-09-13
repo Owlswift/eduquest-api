@@ -68,6 +68,19 @@ export class UsersController {
     return this.users.getLeaderboard(user.sub, 20, period ?? 'all');
   }
 
+  // GET /users/search?q=ola&subjectId=math — find a student to challenge,
+  // by username or name prefix. Excludes the caller and (when subjectId
+  // is given) anyone already in an open challenge with the caller for
+  // that subject.
+  @Get('search')
+  async search(
+    @CurrentUser() user: any,
+    @Query('q') q: string,
+    @Query('subjectId') subjectId?: string,
+  ) {
+    return this.users.searchStudents(user.sub, q ?? '', subjectId);
+  }
+
   // GET /users/subject-progress
   @Get('subject-progress')
   async getSubjectProgress(@CurrentUser() user: any) {

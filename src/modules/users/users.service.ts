@@ -380,4 +380,71 @@ export class UsersService {
       }))
       .sort((a, b) => b.progress - a.progress);
   }
+
+  // ─── GET /users/search ──────────────────────────────────────────────────────
+
+  /** Looks up students by username/name prefix, for picking a Challenges
+   *  opponent. Excludes the caller and admin accounts, and requires at
+   *  least 2 characters so it can't be used to enumerate every student -
+   *  but otherwise returns every name match, even ones the caller can't
+   *  actually challenge right now. Hiding those outright would just be
+   *  confusing ("why can't I find my friend by searching?"); instead
+   *  each result carries `eligible` + `ineligibleReason` (a different
+   *  class level, or - when `subjectId` is given - an open PENDING/
+   *  ACTIVE challenge with them for that subject already) so the client
+   *  can show *why* rather than silently omitting them.
+   *  ChallengesService.create() is the actual enforcement point - this
+   *  is purely informational. */
+  async searchStudents(callerId: string, q: string, subjectId?: string) {
+    const query = q.trim();
+    if (query.length < 2) return [];
+
+    const caller = await this.prisma.user.findUnique({
+      where: { id: callerId },
+      select: { classLevel: true },
+    });
+
+    const users = await this.prisma.user.findMany({
+      where: {
+        id: { not: callerId },
+        role: 'STUDENT',
+        OR: [
+          { username: { contains: query, mode: 'insensitive' } },
+          { fullName: { contains: query, mode: 'insensitive' } },
+        ],
+      },
+      select: { id: true, username: true, fullName: true, avatarUrl: true, classLevel: true },
+      take: 15,
+      orderBy: { username: 'asc' },
+    });
+    if (users.length === 0) return users;
+
+    let alreadyOpenWith = new Set<string>();
+    if (subjectId) {
+      const openChallenges = await this.prisma.challenge.findMany({
+        where: {
+          subjectId,
+          status: { in: ['PENDING', 'ACTIVE'] },
+          OR: [
+            { challengerId: callerId, opponentId: { in: users.map((u) => u.id) } },
+            { opponentId: callerId, challengerId: { in: users.map((u) => u.id) } },
+          ],
+        },
+        select: { challengerId: true, opponentId: true },
+      });
+      alreadyOpenWith = new Set(
+        openChallenges.map((c) => (c.challengerId === callerId ? c.opponentId : c.challengerId)),
+      );
+    }
+
+    return users.map((u) => {
+      let ineligibleReason: string | null = null;
+      if (caller && u.classLevel !== caller.classLevel) {
+        ineligibleReason = `In ${u.classLevel}, not your class level`;
+      } else if (alreadyOpenWith.has(u.id)) {
+        ineligibleReason = 'You already have an open challenge with them for this subject';
+      }
+      return { ...u, eligible: ineligibleReason === null, ineligibleReason };
+    });
+  }
 }

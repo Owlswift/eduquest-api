@@ -6,6 +6,7 @@ describe('QuizService', () => {
     subject: { findUnique: jest.Mock };
     question: { findMany: jest.Mock };
     user: { update: jest.Mock; findUnique: jest.Mock; count: jest.Mock };
+    subjectStat: { upsert: jest.Mock };
   };
   let activity: { recordQuestions: jest.Mock; recordXp: jest.Mock };
   let service: QuizService;
@@ -15,7 +16,9 @@ describe('QuizService', () => {
       subject: { findUnique: jest.fn() },
       question: { findMany: jest.fn() },
       user: { update: jest.fn(), findUnique: jest.fn(), count: jest.fn() },
+      subjectStat: { upsert: jest.fn() },
     };
+    prisma.subjectStat.upsert.mockResolvedValue({});
     activity = { recordQuestions: jest.fn(), recordXp: jest.fn() };
     service = new QuizService(prisma as any, activity as any);
   });
