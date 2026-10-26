@@ -46,6 +46,21 @@ async function main() {
     // General
     { id: 'marketing', name: 'Marketing', icon: 'campaign_rounded', color: '#FFE11D48', currentTopic: 'Marketing Concepts' },
     { id: 'business_studies', name: 'Business Studies', icon: 'business_center_rounded', color: '#FF7C2D12', currentTopic: 'Entrepreneurship' },
+
+    // JSS (Junior Secondary) - NERDC Basic Education Curriculum. Kept as
+    // distinct subjects from their SS counterparts (even where names are
+    // similar, e.g. "Mathematics") since JSS and SSS are separate
+    // curriculum tracks with their own syllabi.
+    { id: 'jss_english_studies', name: 'English Studies', icon: 'menu_book_rounded', color: '#FF7C3AED', currentTopic: 'Grammar' },
+    { id: 'jss_mathematics', name: 'Mathematics', icon: 'functions_rounded', color: '#FF4F46E5', currentTopic: 'Number and Numeration' },
+    { id: 'jss_physical_and_health_education', name: 'Physical and Health Education', icon: 'sports_rounded', color: '#FF0EA5E9', currentTopic: 'Physical Fitness' },
+    { id: 'jss_christian_religious_studies', name: 'Christian Religious Studies', icon: 'church_rounded', color: '#FFDC2626', currentTopic: 'Bible Study' },
+    { id: 'jss_islamic_studies', name: 'Islamic Studies', icon: 'mosque_rounded', color: '#FF059669', currentTopic: 'Islamic Faith' },
+    { id: 'jss_nigerian_history', name: 'Nigerian History', icon: 'history_edu_rounded', color: '#FFB45309', currentTopic: 'Pre-Colonial Nigeria' },
+    { id: 'jss_social_and_citizenship_studies', name: 'Social and Citizenship Studies', icon: 'groups_rounded', color: '#FF2563EB', currentTopic: 'Citizenship' },
+    { id: 'jss_intermediate_science', name: 'Intermediate Science', icon: 'science_rounded', color: '#FF22C55E', currentTopic: 'Basic Science' },
+    { id: 'jss_digital_technologies', name: 'Digital Technologies', icon: 'devices_rounded', color: '#FF4338CA', currentTopic: 'Computer Basics' },
+    { id: 'jss_business_studies', name: 'Business Studies', icon: 'business_center_rounded', color: '#FF7C2D12', currentTopic: 'Introduction to Business' },
   ];
 
   for (const subject of subjects) {
