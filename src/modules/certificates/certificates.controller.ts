@@ -1,4 +1,4 @@
-import { Controller, Get, UseGuards } from '@nestjs/common';
+import { Controller, Get, Param, StreamableFile, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { CertificatesService } from './certificates.service';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
@@ -16,5 +16,13 @@ export class CertificatesController {
   @ApiOperation({ summary: 'List earned certificates, most recent first' })
   async list(@CurrentUser() user: any) {
     return this.certificates.list(user.sub);
+  }
+
+  // GET /certificates/:id/pdf
+  @Get(':id/pdf')
+  @ApiOperation({ summary: 'Download one of your certificates as a PDF (owner only)' })
+  async pdf(@CurrentUser() user: any, @Param('id') id: string) {
+    const { filename, data } = await this.certificates.pdf(user.sub, id);
+    return new StreamableFile(data, { type: 'application/pdf', disposition: `attachment; filename="${filename}"` });
   }
 }

@@ -1,9 +1,10 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, NotFoundException } from '@nestjs/common';
 import { randomInt } from 'crypto';
 import { Prisma } from '@prisma/client';
 import { publicName } from '../../common/names';
 import { PrismaService } from '../../database/prisma.service';
 import { AchievementsService } from '../gamification/achievements.service';
+import { renderCertificatePdf } from './certificate-pdf';
 import { NotificationsService } from '../notifications/notifications.service';
 
 @Injectable()
@@ -48,6 +49,22 @@ export class CertificatesService {
       rank: c.rank,
       verificationCode: c.verificationCode,
     }));
+  }
+
+  /** The certificate as a PDF, for its owner only: it carries the full name, which the public check never shows. */
+  async pdf(userId: string, id: string): Promise<{ filename: string; data: Buffer }> {
+    const c = await this.prisma.certificate.findFirst({ where: { id, userId }, include: { user: { select: { fullName: true } } } });
+    if (!c) throw new NotFoundException('Certificate not found');
+    const data = await renderCertificatePdf({
+      kind: c.kind,
+      title: c.title ?? (c.kind === 'SUBJECT' ? `${c.subjectName} mastery` : c.subjectName),
+      subjectName: c.subjectName,
+      rank: c.rank,
+      holderName: c.user.fullName,
+      issuedAt: c.createdAt,
+      verificationCode: c.verificationCode,
+    });
+    return { filename: `eduquest-certificate-${c.verificationCode}.pdf`, data };
   }
 
   /**
