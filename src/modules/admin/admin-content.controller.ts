@@ -221,7 +221,7 @@ export class AdminContentController {
   // ─── Scheduled jobs ─────────────────────────────────────────────────────────
 
   @Get('jobs')
-  @ApiOperation({ summary: 'Scheduled tasks and whether the scheduler is running (needs REDIS_URL)' })
+  @ApiOperation({ summary: 'Scheduled tasks and whether the scheduler is running (in-process, or BullMQ with REDIS_URL)' })
   listJobs() {
     return this.jobs.describe();
   }
