@@ -1,4 +1,6 @@
-import { IsArray, IsEmail, IsOptional, IsString, MinLength } from 'class-validator';
+import { Transform } from 'class-transformer';
+import { IsArray, IsEmail, IsIn, IsOptional, IsString, MinLength } from 'class-validator';
+import { canonicalState, NIGERIAN_STATES } from '../../../common/geo/nigerian-states';
 
 export class RegisterDto {
   @IsString()
@@ -20,7 +22,9 @@ export class RegisterDto {
   country?: string;
 
   @IsOptional()
-  @IsString()
+  // A blank picker value means "not chosen"; anything else must be a real state.
+  @Transform(({ value }) => (typeof value === 'string' && value.trim() === '' ? undefined : (canonicalState(value) ?? value)))
+  @IsIn(NIGERIAN_STATES as readonly string[], { message: 'state must be a Nigerian state, e.g. Lagos or FCT' })
   state?: string;
 
   @IsOptional()

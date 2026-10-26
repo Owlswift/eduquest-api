@@ -463,3 +463,28 @@ describe('UsersService.searchStudents', () => {
     expect(prisma.challenge.findMany).not.toHaveBeenCalled();
   });
 });
+
+describe('UsersService.updateProfile subjects', () => {
+  let prisma: { subject: { findMany: jest.Mock }; user: { update: jest.Mock } };
+  let service: UsersService;
+
+  beforeEach(() => {
+    prisma = {
+      subject: { findMany: jest.fn() },
+      user: { update: jest.fn().mockResolvedValue({ id: 'u1', interests: null, subjects: '["math"]' }) },
+    };
+    service = new UsersService(prisma as any, {} as any, {} as any, {} as any, {} as any, {} as any);
+  });
+
+  it('rejects an unknown subject id and writes nothing', async () => {
+    prisma.subject.findMany.mockResolvedValue([{ id: 'math' }]);
+    await expect(service.updateProfile('u1', { subjects: ['math', 'matsh'] } as any)).rejects.toThrow(/Unknown subject: matsh/);
+    expect(prisma.user.update).not.toHaveBeenCalled();
+  });
+
+  it('stores each subject once', async () => {
+    prisma.subject.findMany.mockResolvedValue([{ id: 'math' }]);
+    await service.updateProfile('u1', { subjects: ['math', 'math'] } as any);
+    expect(prisma.user.update.mock.calls[0][0].data.subjects).toBe('["math"]');
+  });
+});

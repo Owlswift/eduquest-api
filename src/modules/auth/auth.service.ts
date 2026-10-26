@@ -43,7 +43,7 @@ export class AuthService {
           passwordHash: hash,
           phone: dto.phone?.toLowerCase().trim() || null,
           country: dto.country?.toLowerCase().trim() || null,
-          state: dto.state?.toLowerCase().trim() || null,
+          state: dto.state ?? null, // already canonical (see RegisterDto)
           institution: dto.institution?.toLowerCase().trim() || null,
           age: dto.age?.toLowerCase().trim() || null,
           interests: dto.interests ? JSON.stringify(dto.interests) : null,

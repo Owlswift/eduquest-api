@@ -57,7 +57,7 @@ describe('AdminQuestionsService', () => {
       ['duplicate options', { options: [{ text: 'A' }, { text: ' a ' }] }, 'same text'],
       ['an answer index outside the options', { correctIndex: 3 }, 'correctIndex'],
     ])('rejects %s', async (_name, over, hint) => {
-      if (over.subjectId) prisma.subject.findUnique.mockResolvedValue(null);
+      if ((over as any).subjectId) prisma.subject.findUnique.mockResolvedValue(null);
       await expect(service.create('admin1', { ...base, ...over } as any)).rejects.toThrow(new RegExp(hint, 'i'));
       expect(prisma.question.create).not.toHaveBeenCalled();
       expect(audit.log).not.toHaveBeenCalled();

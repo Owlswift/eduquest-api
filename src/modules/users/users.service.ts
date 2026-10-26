@@ -75,7 +75,15 @@ export class UsersService {
     if (dto.phone) data.phone = dto.phone.toLowerCase().trim();
     if (dto.classLevel) data.classLevel = dto.classLevel;
     if (dto.state) data.state = dto.state;
-    if (dto.subjects) data.subjects = JSON.stringify(dto.subjects);
+    if (dto.subjects) {
+      // Only real subjects, each once: a typo here would silently drop a
+      // student out of that subject's practice and rankings.
+      const unique = [...new Set(dto.subjects)];
+      const known = await this.prisma.subject.findMany({ where: { id: { in: unique } }, select: { id: true } });
+      const unknown = unique.filter((id) => !known.some((k) => k.id === id));
+      if (unknown.length > 0) throw new BadRequestException(`Unknown subject: ${unknown.join(', ')}`);
+      data.subjects = JSON.stringify(unique);
+    }
 
     try {
       const user = await this.prisma.user.update({

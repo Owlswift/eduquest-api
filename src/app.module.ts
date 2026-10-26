@@ -8,6 +8,7 @@ import { GamificationModule } from './modules/gamification/gamification.module';
 import { ProgressModule } from './modules/progress/progress.module';
 import { DailyChallengesModule } from './modules/daily-challenges/daily-challenges.module';
 import { ExamsModule } from './modules/exams/exams.module';
+import { MetaModule } from './modules/meta/meta.module';
 import { HealthModule } from './modules/health/health.module';
 import { AuthModule } from './modules/auth/auth.module';
 import { UsersModule } from './modules/users/users.module';
@@ -37,6 +38,7 @@ import { AdminModule } from './modules/admin/admin.module';
     ProgressModule,
     DailyChallengesModule,
     ExamsModule,
+    MetaModule,
     MailerModule,
     PushModule,
     NotificationsModule,
