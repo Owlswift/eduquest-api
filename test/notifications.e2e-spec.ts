@@ -202,10 +202,12 @@ d('scheduled notifications (real database)', () => {
   });
 
   describe('scheduler', () => {
-    it('describes its tasks and stays off without Redis, while tasks still run by hand', async () => {
+    it('describes its tasks and stays off when disabled, while tasks still run by hand', async () => {
       delete process.env.REDIS_URL;
-      const jobs = new JobsService(tasks);
+      process.env.DISABLE_SCHEDULER = 'true';
+      const jobs = new JobsService(tasks, prisma);
       await jobs.onModuleInit();
+      delete process.env.DISABLE_SCHEDULER;
       expect(jobs.enabled).toBe(false);
       const d = jobs.describe();
       expect(d.scheduler).toMatch(/off/);

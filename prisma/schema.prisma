@@ -1030,3 +1030,16 @@ model TheoryQuestion {
   @@index([subjectId, classLevel])
   @@index([subjectId, examType, examYear])
 }
+
+/// One row per (task, slot) the in-process scheduler has claimed. The unique
+/// pair is what makes a slot run exactly once across instances and restarts.
+model ScheduledRun {
+  id         String    @id @default(cuid())
+  task       String
+  slot       String
+  startedAt  DateTime  @default(now())
+  finishedAt DateTime?
+
+  @@unique([task, slot])
+  @@index([startedAt])
+}

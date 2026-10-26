@@ -20,7 +20,7 @@ d('scheduled jobs (real Redis)', () => {
 
   const start = async () => {
     process.env.REDIS_URL = url;
-    const jobs = new JobsService(tasks as any);
+    const jobs = new JobsService(tasks as any, {} as any);
     await jobs.onModuleInit();
     started.push(jobs);
     return jobs;
