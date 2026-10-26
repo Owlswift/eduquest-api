@@ -241,6 +241,8 @@ model User {
   competitionEntries   CompetitionParticipant[]
   qualifications       CompetitionQualification[]
   refreshTokens        RefreshToken[]
+  /// Access tokens issued before this moment are refused (set when the password changes).
+  tokensValidFrom      DateTime?
   rewardRedemptions    RewardRedemption[]
   passwordResetOtps    PasswordResetOtp[]
   notifications        Notification[]

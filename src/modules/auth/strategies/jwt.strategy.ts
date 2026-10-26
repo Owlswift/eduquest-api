@@ -16,7 +16,7 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
     });
   }
 
-  async validate(payload: { sub: string; email: string; jti: string }) {
+  async validate(payload: { sub: string; email: string; jti: string; iat?: number }) {
     // Check if token has been blacklisted (logged out)
     const blacklisted = await this.authService.isTokenBlacklisted(payload.jti);
     if (blacklisted) {
@@ -28,6 +28,9 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
     });
 
     if (!user) throw new UnauthorizedException();
+    if (user.tokensValidFrom && (payload.iat ?? 0) < Math.floor(user.tokensValidFrom.getTime() / 1000)) {
+      throw new UnauthorizedException('Session ended, please sign in again');
+    }
 
     // Attach the full payload (including jti) to the request via user
     return { ...user, tokenJti: payload.jti };

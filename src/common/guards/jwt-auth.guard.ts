@@ -33,7 +33,7 @@ export class JwtAuthGuard implements CanActivate {
       throw new UnauthorizedException('No token provided');
     }
 
-    let payload: { sub: string; email: string; jti: string };
+    let payload: { sub: string; email: string; jti: string; iat?: number };
     try {
       payload = this.jwt.verify(token, { secret: process.env.JWT_SECRET });
     } catch {
@@ -50,6 +50,10 @@ export class JwtAuthGuard implements CanActivate {
     const user = await this.prisma.user.findUnique({ where: { id: payload.sub } });
     if (!user) {
       throw new UnauthorizedException('Account no longer exists');
+    }
+    // Issued before the password last changed: refused (the app then refreshes into a valid one).
+    if (user.tokensValidFrom && (payload.iat ?? 0) < Math.floor(user.tokensValidFrom.getTime() / 1000)) {
+      throw new UnauthorizedException('Session ended, please sign in again');
     }
 
     request.user = payload;

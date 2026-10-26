@@ -9,6 +9,7 @@ import { PrismaClient } from '@prisma/client';
 import * as argon2 from 'argon2';
 import { AuthService } from '../src/modules/auth/auth.service';
 import { hashRefreshToken, REFRESH_TTL_MS, REUSE_GRACE_MS, RefreshTokensService } from '../src/modules/auth/refresh-tokens.service';
+import { JwtAuthGuard } from '../src/common/guards/jwt-auth.guard';
 import { UsersService } from '../src/modules/users/users.service';
 
 const url = process.env.TEST_DATABASE_URL;
@@ -39,12 +40,12 @@ d('refresh tokens (real database)', () => {
     await prisma.$disconnect();
   });
 
-  it('gives a login a short-lived access token and a refresh token that renews it', async () => {
+  it('gives a login a 30-day access token and a refresh token that renews it', async () => {
     const u = await makeUser();
     const login = await auth.signToken(u.id, u.email);
-    expect(login.expiresIn).toBe(3600);
+    expect(login.expiresIn).toBe(30 * 86400);
     const decoded = jwt.verify(login.accessToken, { secret: 'test-secret' });
-    expect(decoded.exp - decoded.iat).toBe(3600);
+    expect(decoded.exp - decoded.iat).toBe(30 * 86400);
 
     const renewed = await auth.refresh(login.refreshToken);
     expect(renewed.refreshToken).not.toBe(login.refreshToken);
@@ -127,6 +128,35 @@ d('refresh tokens (real database)', () => {
     await users.changePassword(u.id, 'oldpass1', 'newpass1', mine.refreshToken);
     await expect(auth.refresh(other.refreshToken)).rejects.toBeInstanceOf(UnauthorizedException);
     await expect(auth.refresh(mine.refreshToken)).resolves.toBeDefined();
+  });
+
+  describe('after a password change', () => {
+    const guard = () => new JwtAuthGuard(jwt, prisma as any);
+    const ctx = (token: string) => ({ switchToHttp: () => ({ getRequest: () => ({ headers: { authorization: `Bearer ${token}` } }) }) }) as any;
+    const tokenIssuedAt = (userId: string, email: string, iat: number) =>
+      jwt.sign({ sub: userId, email, jti: `j${Math.random()}`, iat }, { secret: 'test-secret', expiresIn: 3600 });
+
+    it('refuses access tokens issued before it, and accepts ones issued after', async () => {
+      const u = await makeUser();
+      const old = tokenIssuedAt(u.id, u.email, Math.floor(Date.now() / 1000) - 600);
+      await expect(guard().canActivate(ctx(old))).resolves.toBe(true);
+
+      await prisma.user.update({ where: { id: u.id }, data: { passwordHash: await argon2.hash('oldpass1') } });
+      const users = new UsersService(prisma as any, {} as any, {} as any, {} as any, {} as any, {} as any);
+      await users.changePassword(u.id, 'oldpass1', 'newpass1');
+
+      await expect(guard().canActivate(ctx(old))).rejects.toThrow(/sign in again/);
+      const fresh = tokenIssuedAt(u.id, u.email, Math.floor(Date.now() / 1000) + 2);
+      await expect(guard().canActivate(ctx(fresh))).resolves.toBe(true);
+    });
+
+    it('a password reset does the same', async () => {
+      const u = await makeUser();
+      const old = tokenIssuedAt(u.id, u.email, Math.floor(Date.now() / 1000) - 600);
+      const reset = jwt.sign({ sub: u.id, purpose: 'password_reset' }, { secret: 'test-secret', expiresIn: 600 });
+      await auth.resetPassword(reset, 'brandnew1');
+      await expect(guard().canActivate(ctx(old))).rejects.toThrow(/sign in again/);
+    });
   });
 
   it('a deleted account takes its logins with it', async () => {

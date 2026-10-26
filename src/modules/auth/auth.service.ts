@@ -284,8 +284,10 @@ export class AuthService {
       where: { id: payload.sub },
       data: { passwordHash: hash },
     });
-    // Whoever knew the old password (or stole a session) must sign in again.
+    // Whoever knew the old password (or stole a session) must sign in again:
+    // renewals stop and every access token issued so far is refused.
     await this.refreshTokens.revokeAllFor(payload.sub);
+    await this.prisma.user.update({ where: { id: payload.sub }, data: { tokensValidFrom: new Date() } });
 
     return { message: 'Password reset successfully' };
   }
@@ -305,10 +307,10 @@ export class AuthService {
     return !!token;
   }
 
-  /** Seconds an access token lives. Short, because a copied one cannot be recalled; the refresh token renews it. */
+  /** Seconds an access token lives: 30 days unless ACCESS_TOKEN_TTL_SECONDS says otherwise. A copied token is cut off by logout, or by a password change (`tokensValidFrom`). */
   static accessTtlSeconds(): number {
     const n = Number(process.env.ACCESS_TOKEN_TTL_SECONDS);
-    return Number.isFinite(n) && n >= 60 ? Math.floor(n) : 3600;
+    return Number.isFinite(n) && n >= 60 ? Math.floor(n) : 30 * 24 * 3600;
   }
 
   /** A new login: an access token plus the refresh token that renews it. */

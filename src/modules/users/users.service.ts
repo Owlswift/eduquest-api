@@ -137,7 +137,8 @@ export class UsersService {
     if (!valid) throw new UnauthorizedException('Current password is incorrect');
 
     const hash = await argon2.hash(newPassword);
-    await this.prisma.user.update({ where: { id: userId }, data: { passwordHash: hash } });
+    // Older access tokens stop working now (this device's refreshes into a new one by itself).
+    await this.prisma.user.update({ where: { id: userId }, data: { passwordHash: hash, tokensValidFrom: new Date() } });
     // Sign out every other device. The caller's own login (its refresh token) stays.
     const keep = keepRefreshToken
       ? await this.prisma.refreshToken.findFirst({ where: { userId, tokenHash: hashRefreshToken(keepRefreshToken) }, select: { familyId: true } })
