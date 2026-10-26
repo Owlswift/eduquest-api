@@ -55,7 +55,7 @@ export class UsersController {
   // PATCH /users/change-password
   @Patch('change-password')
   async changePassword(@CurrentUser() user: any, @Body() dto: ChangePasswordDto) {
-    return this.users.changePassword(user.sub, dto.currentPassword, dto.newPassword);
+    return this.users.changePassword(user.sub, dto.currentPassword, dto.newPassword, dto.refreshToken);
   }
 
   // GET /users/daily-summary

@@ -1,4 +1,5 @@
 import { Injectable, ConflictException, BadRequestException, UnauthorizedException } from '@nestjs/common';
+import { hashRefreshToken } from '../auth/refresh-tokens.service';
 import * as argon2 from 'argon2';
 import { PrismaService } from '../../database/prisma.service';
 import { ActivityService } from '../activity/activity.service';
@@ -122,7 +123,7 @@ export class UsersService {
 
   // ─── Change password (while logged in) ───────────────────────────────────────
 
-  async changePassword(userId: string, currentPassword: string, newPassword: string) {
+  async changePassword(userId: string, currentPassword: string, newPassword: string, keepRefreshToken?: string) {
     const user = await this.prisma.user.findUnique({ where: { id: userId } });
     if (!user) throw new UnauthorizedException('Invalid credentials');
 
@@ -137,6 +138,14 @@ export class UsersService {
 
     const hash = await argon2.hash(newPassword);
     await this.prisma.user.update({ where: { id: userId }, data: { passwordHash: hash } });
+    // Sign out every other device. The caller's own login (its refresh token) stays.
+    const keep = keepRefreshToken
+      ? await this.prisma.refreshToken.findFirst({ where: { userId, tokenHash: hashRefreshToken(keepRefreshToken) }, select: { familyId: true } })
+      : null;
+    await this.prisma.refreshToken.updateMany({
+      where: { userId, revokedAt: null, ...(keep && { familyId: { not: keep.familyId } }) },
+      data: { revokedAt: new Date() },
+    });
 
     return { message: 'Password changed successfully' };
   }

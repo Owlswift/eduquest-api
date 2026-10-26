@@ -27,6 +27,16 @@ export class ScheduledTasksService {
     private notifications: NotificationsService,
   ) {}
 
+  /** Housekeeping: drops refresh tokens that expired over a day ago and lapsed logout-blacklist entries. */
+  async purgeExpiredTokens(now: Date = new Date()) {
+    const cutoff = new Date(now.getTime() - DAY);
+    const [refresh, blacklist] = await Promise.all([
+      this.prisma.refreshToken.deleteMany({ where: { expiresAt: { lt: cutoff } } }),
+      this.prisma.blacklistedToken.deleteMany({ where: { expiresAt: { lt: now } } }),
+    ]);
+    return { refreshTokens: refresh.count, blacklisted: blacklist.count };
+  }
+
   /** Persists competition status changes and announces competitions opening and about to close. */
   async advanceCompetitions(now: Date = new Date()) {
     const live = await this.prisma.competition.findMany({ where: { status: { in: ['PUBLISHED', 'ACTIVE'] } } });

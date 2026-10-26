@@ -16,6 +16,7 @@ export const TASKS: TaskDefinition[] = [
   { name: 'competitions-tick', description: 'Open and close competitions on time; announce openings and closing soon', schedule: { everyMs: 5 * 60_000 }, run: (t) => t.advanceCompetitions() },
   { name: 'daily-challenge-ready', description: 'Morning prompt that today’s daily challenge is ready', schedule: { pattern: '0 7 * * *' }, run: (t) => t.dailyChallengeReady() },
   { name: 'streak-reminder', description: 'Evening nudge for students about to lose a streak', schedule: { pattern: '0 18 * * *' }, run: (t) => t.streakReminders() },
+  { name: 'purge-expired-tokens', description: 'Delete expired sign-in tokens', schedule: { pattern: '0 3 * * *' }, run: (t) => t.purgeExpiredTokens() },
   { name: 'prize-claim-reminders', description: 'Remind winners to claim before the deadline', schedule: { pattern: '0 9 * * *' }, run: (t) => t.prizeClaimReminders() },
 ];
 

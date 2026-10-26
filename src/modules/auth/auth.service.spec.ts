@@ -19,7 +19,7 @@ describe('AuthService password reset flow', () => {
     };
     jwt = { signAsync: jest.fn(), verifyAsync: jest.fn() };
     mailer = { send: jest.fn() };
-    service = new AuthService(prisma as any, jwt as any, {} as any, mailer as any);
+    service = new AuthService(prisma as any, jwt as any, {} as any, mailer as any, { revokeAllFor: jest.fn() } as any);
   });
 
   afterEach(() => jest.useRealTimers());

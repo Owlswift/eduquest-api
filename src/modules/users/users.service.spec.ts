@@ -254,12 +254,28 @@ describe('UsersService.claimWelcomeBonus', () => {
 });
 
 describe('UsersService.changePassword', () => {
-  let prisma: { user: { findUnique: jest.Mock; update: jest.Mock } };
+  let prisma: { user: { findUnique: jest.Mock; update: jest.Mock }; refreshToken: { findFirst: jest.Mock; updateMany: jest.Mock } };
   let service: UsersService;
 
   beforeEach(() => {
-    prisma = { user: { findUnique: jest.fn(), update: jest.fn() } };
+    prisma = { user: { findUnique: jest.fn(), update: jest.fn() }, refreshToken: { findFirst: jest.fn().mockResolvedValue(null), updateMany: jest.fn() } };
     service = new UsersService(prisma as any, {} as any, {} as any, {} as any, {} as any, {} as any);
+  });
+
+  it('signs out other devices but keeps the caller\'s own login', async () => {
+    prisma.user.findUnique.mockResolvedValue({ id: 'u1', passwordHash: await argon2.hash('oldpass1') });
+    prisma.refreshToken.findFirst.mockResolvedValue({ familyId: 'fam-mine' });
+    await service.changePassword('u1', 'oldpass1', 'newpass1', 'my-refresh-token');
+    expect(prisma.refreshToken.updateMany).toHaveBeenCalledWith({
+      where: { userId: 'u1', revokedAt: null, familyId: { not: 'fam-mine' } },
+      data: { revokedAt: expect.any(Date) },
+    });
+  });
+
+  it('signs out every device when no refresh token is given', async () => {
+    prisma.user.findUnique.mockResolvedValue({ id: 'u1', passwordHash: await argon2.hash('oldpass1') });
+    await service.changePassword('u1', 'oldpass1', 'newpass1');
+    expect(prisma.refreshToken.updateMany).toHaveBeenCalledWith({ where: { userId: 'u1', revokedAt: null }, data: { revokedAt: expect.any(Date) } });
   });
 
   it('changes the password when the current one is correct', async () => {

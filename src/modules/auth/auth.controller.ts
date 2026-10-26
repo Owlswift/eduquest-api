@@ -9,6 +9,7 @@ import { GoogleAuthDto } from './dto/google-auth.dto';
 import { ForgotPasswordDto } from './dto/forgot-password.dto';
 import { VerifyOtpDto } from './dto/verify-otp.dto';
 import { ResetPasswordDto } from './dto/reset-password.dto';
+import { LogoutDto, RefreshDto } from './dto/refresh.dto';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 
 @ApiTags('auth')
@@ -19,14 +20,14 @@ export class AuthController {
 
   @Post('register')
   @Throttle({ default: { limit: 5, ttl: 60_000 } })
-  @ApiOperation({ summary: 'Register a new user and receive an access token' })
+  @ApiOperation({ summary: 'Register a new user and receive an access token and a refresh token' })
   register(@Body() dto: RegisterDto) {
     return this.auth.register(dto);
   }
 
   @Post('login')
   @Throttle({ default: { limit: 10, ttl: 60_000 } })
-  @ApiOperation({ summary: 'Log in and receive an access token' })
+  @ApiOperation({ summary: 'Log in and receive an access token and a refresh token' })
   login(@Body() dto: LoginDto) {
     return this.auth.login(dto);
   }
@@ -42,8 +43,15 @@ export class AuthController {
   @UseGuards(AuthGuard('jwt'))
   @Post('logout')
   @ApiOperation({ summary: 'Log out and blacklist the current token' })
-  logout(@CurrentUser() user: any) {
-    return this.auth.logout(user.id, user.tokenJti);
+  logout(@CurrentUser() user: any, @Body() dto: LogoutDto) {
+    return this.auth.logout(user.id, user.tokenJti, dto?.refreshToken);
+  }
+
+  @Post('refresh')
+  @Throttle({ default: { limit: 30, ttl: 60_000 } })
+  @ApiOperation({ summary: 'Swap a refresh token for a new access token and a new refresh token (the old one stops working)' })
+  refresh(@Body() dto: RefreshDto) {
+    return this.auth.refresh(dto.refreshToken);
   }
 
   @Post('forgot-password')

@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { APP_GUARD } from '@nestjs/core';
 import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
+import { RedisThrottlerStorage } from './common/throttler/redis-throttler.storage';
 import { ConfigModule } from '@nestjs/config';
 import { PrismaModule } from './database/prisma.module';
 import { LedgerModule } from './modules/ledger/ledger.module';
@@ -34,7 +35,11 @@ import { AdminModule } from './modules/admin/admin.module';
     ConfigModule.forRoot({ isGlobal: true }),
     // Default for every route: 120 requests/min per client IP. Sensitive
     // routes (auth, quiz submit) tighten it with @Throttle.
-    ThrottlerModule.forRoot([{ name: 'default', ttl: 60_000, limit: 120 }]),
+    // With REDIS_URL the counters are shared by every instance (see RedisThrottlerStorage).
+    ThrottlerModule.forRoot({
+      throttlers: [{ name: 'default', ttl: 60_000, limit: 120 }],
+      ...(process.env.REDIS_URL && { storage: new RedisThrottlerStorage(process.env.REDIS_URL) }),
+    }),
     PrismaModule,
     LedgerModule,
     GamificationModule,

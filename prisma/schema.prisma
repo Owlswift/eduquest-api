@@ -240,6 +240,7 @@ model User {
   dailyActivities      DailyActivity[]
   competitionEntries   CompetitionParticipant[]
   qualifications       CompetitionQualification[]
+  refreshTokens        RefreshToken[]
   rewardRedemptions    RewardRedemption[]
   passwordResetOtps    PasswordResetOtp[]
   notifications        Notification[]
@@ -770,6 +771,30 @@ model DailyActivity {
   @@unique([userId, date])
   @@index([userId, date])
   @@index([date])
+}
+
+/// One long-lived login. The token itself is never stored, only its SHA-256.
+/// Each use replaces it with a new one in the same family; using an old one
+/// again means it leaked, so the whole family is revoked.
+model RefreshToken {
+  id        String    @id @default(cuid())
+  userId    String
+  /// All tokens descended from one login.
+  familyId  String
+  tokenHash String    @unique
+  expiresAt DateTime
+  /// When the family stops being renewable whatever happens (absolute cap).
+  familyExpiresAt DateTime
+  revokedAt DateTime?
+  /// Set when it was used up by a rotation (as opposed to revoked by logout).
+  rotatedAt DateTime?
+  createdAt DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([familyId])
+  @@index([expiresAt])
 }
 
 model BlacklistedToken {

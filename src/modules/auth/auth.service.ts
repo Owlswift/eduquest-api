@@ -6,6 +6,7 @@ import {
   BadRequestException,
 } from '@nestjs/common';
 import { PrismaService } from '../../database/prisma.service';
+import { RefreshTokensService } from './refresh-tokens.service';
 import * as argon2 from 'argon2';
 import { JwtService } from '@nestjs/jwt';
 import * as crypto from 'crypto';
@@ -25,6 +26,7 @@ export class AuthService {
     private jwt: JwtService,
     private googleVerifier: GoogleTokenVerifier,
     private mailer: MailerService,
+    private refreshTokens: RefreshTokensService,
   ) {}
 
   // ─── Email/Password Register ────────────────────────────────────────────────
@@ -158,13 +160,17 @@ export class AuthService {
 
   // ─── Logout ─────────────────────────────────────────────────────────────────
 
-  async logout(userId: string, tokenJti: string) {
+  async logout(userId: string, tokenJti: string, refreshToken?: string) {
     await this.prisma.blacklistedToken.create({
       data: {
         tokenJti,
-        expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
+        // Long enough to outlast any access token issued before the TTL was shortened (7 days).
+        expiresAt: new Date(Date.now() + Math.max(AuthService.accessTtlSeconds() * 1000, 7 * 24 * 60 * 60 * 1000)),
       },
     });
+    // End this device's login; a client that sent no refresh token (older app) ends them all.
+    if (refreshToken) await this.refreshTokens.revokeLogin(userId, refreshToken);
+    else await this.refreshTokens.revokeAllFor(userId);
     return { message: 'Logged out successfully' };
   }
 
@@ -278,6 +284,8 @@ export class AuthService {
       where: { id: payload.sub },
       data: { passwordHash: hash },
     });
+    // Whoever knew the old password (or stole a session) must sign in again.
+    await this.refreshTokens.revokeAllFor(payload.sub);
 
     return { message: 'Password reset successfully' };
   }
@@ -297,15 +305,32 @@ export class AuthService {
     return !!token;
   }
 
-  async signToken(userId: string, email: string) {
-    const jti = crypto.randomUUID();
-    const payload = { sub: userId, email, jti };
+  /** Seconds an access token lives. Short, because a copied one cannot be recalled; the refresh token renews it. */
+  static accessTtlSeconds(): number {
+    const n = Number(process.env.ACCESS_TOKEN_TTL_SECONDS);
+    return Number.isFinite(n) && n >= 60 ? Math.floor(n) : 3600;
+  }
 
+  /** A new login: an access token plus the refresh token that renews it. */
+  async signToken(userId: string, email: string) {
+    return this.session(userId, email, await this.refreshTokens.issue(userId));
+  }
+
+  /** Trades a refresh token for a new access token and a new refresh token. */
+  async refresh(refreshToken: string) {
+    const next = await this.refreshTokens.rotate(refreshToken);
+    const user = await this.prisma.user.findUnique({ where: { id: next.userId }, select: { id: true, email: true } });
+    if (!user) throw new UnauthorizedException('Account no longer exists');
+    return this.session(user.id, user.email, next);
+  }
+
+  private async session(userId: string, email: string, refresh: { token: string }) {
+    const jti = crypto.randomUUID();
+    const expiresIn = AuthService.accessTtlSeconds();
     return {
-      accessToken: await this.jwt.signAsync(payload, {
-        secret: process.env.JWT_SECRET,
-        expiresIn: '7d',
-      }),
+      accessToken: await this.jwt.signAsync({ sub: userId, email, jti }, { secret: process.env.JWT_SECRET, expiresIn }),
+      refreshToken: refresh.token,
+      expiresIn,
     };
   }
 
