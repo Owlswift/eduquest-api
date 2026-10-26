@@ -96,6 +96,8 @@ export class LedgerService {
       throw new BadRequestException('Invalid amount');
     }
     const run = async (db: Db) => {
+      // The conditional UPDATE below takes the row lock first, so spends
+      // already lock in the same order as grants.
       const updated = await db.user.updateMany({
         where: { id: input.userId, coins: { gte: input.coins } },
         data: { coins: { decrement: input.coins } },
@@ -137,6 +139,14 @@ export class LedgerService {
     const coins = Math.max(0, Math.trunc(input.coins ?? 0));
     let appliedXp = 0;
     let appliedCoins = 0;
+
+    // Take the student's row lock before anything else. Inserting a ledger row
+    // and then updating the balance, in two transactions for the same student
+    // at once, otherwise interleaves into a deadlock. Same-student grants now
+    // queue here, in one order.
+    if (xp > 0 || coins > 0) {
+      await db.$queryRaw`SELECT 1 FROM "User" WHERE id = ${input.userId} FOR NO KEY UPDATE`;
+    }
 
     // createMany + skipDuplicates compiles to INSERT .. ON CONFLICT DO
     // NOTHING: a replayed key inserts nothing (count 0) and, unlike a

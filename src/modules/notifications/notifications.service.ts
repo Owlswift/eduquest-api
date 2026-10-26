@@ -103,11 +103,12 @@ export class NotificationsService {
   }
 
   async updatePreferences(userId: string, changes: Partial<Preferences>): Promise<Preferences> {
-    const p = await this.prisma.notificationPreference.upsert({
-      where: { userId },
-      create: { userId, ...changes },
-      update: changes,
-    });
+    // An upsert with nothing to update is a read-then-create, so two first
+    // calls at once collide on the unique userId. Insert-if-missing is atomic.
+    await this.prisma.notificationPreference.createMany({ data: [{ userId }], skipDuplicates: true });
+    const p = Object.keys(changes).length
+      ? await this.prisma.notificationPreference.update({ where: { userId }, data: changes })
+      : await this.prisma.notificationPreference.findUniqueOrThrow({ where: { userId } });
     return { studyReminders: p.studyReminders, competitions: p.competitions, achievements: p.achievements, push: p.push };
   }
 
