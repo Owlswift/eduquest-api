@@ -1,10 +1,14 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { UserRole } from '@prisma/client';
+import { AuditService } from './audit.service';
 import { PrismaService } from '../../database/prisma.service';
 
 @Injectable()
 export class AdminService {
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private prisma: PrismaService,
+    private audit: AuditService,
+  ) {}
 
   // ─── GET /admin/overview ────────────────────────────────────────────────────
 
@@ -123,6 +127,15 @@ export class AdminService {
       where: { id: targetUserId },
       data: { role },
       select: { id: true, fullName: true, role: true },
+    });
+    await this.audit.log({
+      adminId: adminUserId,
+      action: 'user.role',
+      entityType: 'user',
+      entityId: targetUserId,
+      summary: `${target.fullName}: ${target.role} to ${role}`,
+      before: { role: target.role },
+      after: { role },
     });
     return updated;
   }

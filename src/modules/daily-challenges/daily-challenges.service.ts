@@ -28,7 +28,7 @@ export class DailyChallengesService {
 
     const picked = await this.prisma.$queryRaw<{ id: string }[]>`
       SELECT "id" FROM "Question"
-       WHERE "classLevel" = ${classLevel}::"ClassLevel"
+       WHERE "classLevel" = ${classLevel}::"ClassLevel" AND "status" = 'PUBLISHED'::"QuestionStatus"
        ORDER BY random() LIMIT ${DAILY_QUESTION_COUNT}`;
     if (picked.length < DAILY_MIN_QUESTIONS) return null;
 

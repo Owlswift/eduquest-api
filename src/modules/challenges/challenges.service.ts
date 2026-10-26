@@ -4,7 +4,7 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { AttemptSource, ChallengeStatus, ClassLevel } from '@prisma/client';
+import { AttemptSource, ChallengeStatus, ClassLevel, QuestionStatus } from '@prisma/client';
 import { PrismaService } from '../../database/prisma.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { AchievementsService } from '../gamification/achievements.service';
@@ -790,7 +790,7 @@ export class ChallengesService {
 
     if (combined.length === 0) {
       const all = await this.prisma.question.findMany({
-        where: { subjectId, classLevel },
+        where: { subjectId, classLevel, status: QuestionStatus.PUBLISHED },
         select: { id: true },
       });
       return this._shuffle(all.map((q) => q.id)).slice(0, count);
@@ -802,7 +802,7 @@ export class ChallengesService {
     const available: Record<string, string[]> = {};
     for (const t of combined) {
       const qs = await this.prisma.question.findMany({
-        where: { subjectId, classLevel, topic: t },
+        where: { subjectId, classLevel, topic: t, status: QuestionStatus.PUBLISHED },
         select: { id: true },
       });
       available[t] = this._shuffle(qs.map((q) => q.id));
@@ -819,7 +819,7 @@ export class ChallengesService {
 
     if (pool.length < count) {
       const rest = await this.prisma.question.findMany({
-        where: { subjectId, classLevel, id: { notIn: pool } },
+        where: { subjectId, classLevel, id: { notIn: pool }, status: QuestionStatus.PUBLISHED },
         select: { id: true },
       });
       pool.push(...this._shuffle(rest.map((q) => q.id)).slice(0, count - pool.length));

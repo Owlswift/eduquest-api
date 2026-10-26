@@ -68,6 +68,15 @@ enum QuizSessionStatus {
   SUBMITTED
 }
 
+/// Whether students can be served a question. Only PUBLISHED questions are
+/// ever issued; RETIRED ones stay in the database so past attempts and
+/// reviews keep working.
+enum QuestionStatus {
+  DRAFT
+  PUBLISHED
+  RETIRED
+}
+
 enum ExamStatus {
   IN_PROGRESS
   SUBMITTED
@@ -143,6 +152,7 @@ model User {
   examSessions         ExamSession[]
   ledgerEntries        LedgerEntry[]
   questionAttempts     QuestionAttempt[]
+  auditLogs            AdminAuditLog[]
   achievements         UserAchievement[]
   tutorSessions        TutorSession[]
   studentMastery       StudentMastery[]
@@ -180,6 +190,25 @@ model LedgerEntry {
 
   @@index([userId, currency, createdAt])
   @@index([userId, reason, createdAt])
+}
+
+/// Who changed what in the admin tools (PRODUCT.md section 17.1). Append-only.
+/// `before`/`after` hold a compact snapshot of the changed fields.
+model AdminAuditLog {
+  id         String   @id @default(cuid())
+  adminId    String?
+  action     String
+  entityType String
+  entityId   String
+  summary    String
+  before     Json?
+  after      Json?
+  createdAt  DateTime @default(now())
+
+  admin User? @relation(fields: [adminId], references: [id], onDelete: SetNull)
+
+  @@index([entityType, entityId, createdAt])
+  @@index([adminId, createdAt])
 }
 
 /// One graded answer to one question, kept for history and analytics
@@ -600,6 +629,10 @@ model Question {
   /// The year the source exam was sat, when known.
   examYear        Int?
 
+  /// Existing questions are PUBLISHED; new ones authored in the admin start as DRAFT.
+  status          QuestionStatus @default(PUBLISHED)
+  updatedAt       DateTime       @updatedAt
+
   subject         Subject        @relation(fields: [subjectId], references: [id], onDelete: Cascade)
   options         AnswerOption[]
 
@@ -608,6 +641,7 @@ model Question {
   @@index([subjectId, classLevel])
   @@index([subjectId, topic])
   @@index([subjectId, examType, examYear])
+  @@index([subjectId, classLevel, status])
 }
 
 /// An async 1v1 "Challenges" match: player A picks topics within a

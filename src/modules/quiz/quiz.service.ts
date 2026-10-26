@@ -6,7 +6,7 @@ import {
 import { PrismaService } from '../../database/prisma.service';
 import { ActivityService } from '../activity/activity.service';
 import { GrantResult, LedgerService } from '../ledger/ledger.service';
-import { AttemptSource, ClassLevel, LedgerCurrency, QuizSessionStatus } from '@prisma/client';
+import { AttemptSource, ClassLevel, LedgerCurrency, QuestionStatus, QuizSessionStatus } from '@prisma/client';
 import { DAILY_REWARDS } from '../daily-challenges/daily.constants';
 import { QUIZ_SESSION_TTL_MS } from './quiz.constants';
 import { AchievementsService } from '../gamification/achievements.service';
@@ -68,7 +68,7 @@ export class QuizService {
     // Fetch all matching questions then randomise in JS
     // (avoids ORDER BY RANDOM() which is slow on large tables)
     const all = await this.prisma.question.findMany({
-      where: { subjectId, classLevel },
+      where: { subjectId, classLevel, status: QuestionStatus.PUBLISHED },
       include: { options: true },
     });
 
@@ -105,7 +105,7 @@ export class QuizService {
   async getTopics(subjectId: string, classLevel: ClassLevel = ClassLevel.SS1) {
     const rows = await this.prisma.question.groupBy({
       by: ['topic'],
-      where: { subjectId, classLevel, topic: { not: null } },
+      where: { subjectId, classLevel, topic: { not: null }, status: QuestionStatus.PUBLISHED },
       _count: { _all: true },
     });
 

@@ -8,6 +8,7 @@ describe('AdminService', () => {
     competition: { count: jest.Mock };
     certificate: { count: jest.Mock };
   };
+  let audit: { log: jest.Mock };
   let service: AdminService;
 
   beforeEach(() => {
@@ -24,7 +25,8 @@ describe('AdminService', () => {
       competition: { count: jest.fn() },
       certificate: { count: jest.fn() },
     };
-    service = new AdminService(prisma as any);
+    audit = { log: jest.fn().mockResolvedValue(undefined) };
+    service = new AdminService(prisma as any, audit as any);
   });
 
   afterEach(() => jest.useRealTimers());
@@ -111,7 +113,7 @@ describe('AdminService', () => {
 
   describe('updateUserRole', () => {
     it('promotes a different user', async () => {
-      prisma.user.findUnique.mockResolvedValue({ id: 'u2' });
+      prisma.user.findUnique.mockResolvedValue({ id: 'u2', fullName: 'Ada', role: 'STUDENT' });
       prisma.user.update.mockResolvedValue({ id: 'u2', fullName: 'x', role: 'ADMIN' });
 
       const result = await service.updateUserRole('admin1', 'u2', 'ADMIN' as any);
@@ -122,6 +124,16 @@ describe('AdminService', () => {
         data: { role: 'ADMIN' },
         select: { id: true, fullName: true, role: true },
       });
+      // Role changes are recorded in the audit log.
+      expect(audit.log).toHaveBeenCalledWith(
+        expect.objectContaining({
+          adminId: 'admin1',
+          action: 'user.role',
+          entityId: 'u2',
+          before: { role: 'STUDENT' },
+          after: { role: 'ADMIN' },
+        }),
+      );
     });
 
     it('refuses to let an admin change their own role', async () => {
@@ -129,6 +141,7 @@ describe('AdminService', () => {
         service.updateUserRole('admin1', 'admin1', 'STUDENT' as any),
       ).rejects.toBeInstanceOf(BadRequestException);
       expect(prisma.user.update).not.toHaveBeenCalled();
+      expect(audit.log).not.toHaveBeenCalled();
     });
 
     it('throws for an unknown target user', async () => {

@@ -1,5 +1,5 @@
 import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
-import { AttemptSource, ExamStatus, ExamType } from '@prisma/client';
+import { AttemptSource, ExamStatus, QuestionStatus } from '@prisma/client';
 import { PrismaService } from '../../database/prisma.service';
 import { ActivityService } from '../activity/activity.service';
 import { AchievementsService } from '../gamification/achievements.service';
@@ -42,7 +42,7 @@ export class ExamsService {
 
     const count = dto.count ?? EXAM_DEFAULT_COUNT;
     const past = await this.prisma.question.findMany({
-      where: { subjectId: dto.subjectId, examType: dto.examType },
+      where: { subjectId: dto.subjectId, examType: dto.examType, status: QuestionStatus.PUBLISHED },
       select: { id: true },
     });
     let pool = shuffle(past.map((q) => q.id));
@@ -50,7 +50,7 @@ export class ExamsService {
     if (!pastOnly) {
       // Not enough past questions from this exam body: top up from the rest of the subject.
       const rest = await this.prisma.question.findMany({
-        where: { subjectId: dto.subjectId, id: { notIn: pool } },
+        where: { subjectId: dto.subjectId, id: { notIn: pool }, status: QuestionStatus.PUBLISHED },
         select: { id: true },
       });
       pool = [...pool, ...shuffle(rest.map((q) => q.id))];
