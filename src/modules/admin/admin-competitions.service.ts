@@ -3,12 +3,14 @@ import { CompetitionStatus, Prisma, QuestionStatus } from '@prisma/client';
 import { REGION_LABEL } from '../../common/geo/regions';
 import { PrismaService } from '../../database/prisma.service';
 import { effectiveStatus, prizeRangeProblems, StageRule, stageLinkProblems } from '../competitions/competition-rules';
+import { publicSponsor, SPONSOR_SELECT } from '../sponsors/logo';
 import { AuditService } from './audit.service';
 import { CreateCompetitionDto, PrizeInputDto, UpdateCompetitionDto } from './dto/competition.dto';
 
 const INCLUDE = {
   prizeList: { orderBy: { sortOrder: 'asc' } },
   nextStage: { select: { id: true, title: true } },
+  sponsor: { select: SPONSOR_SELECT },
   _count: { select: { participants: true, qualifications: true } },
 } as const;
 
@@ -85,6 +87,7 @@ export class AdminCompetitionsService {
       claimDeadlineDays: c.claimDeadlineDays,
       participants: c._count.participants,
       // Stages: where this one leads, and who it has qualified for itself.
+      sponsor: publicSponsor(c.sponsor),
       requiresQualification: c.requiresQualification,
       nextStage: c.nextStage,
       advanceCount: c.advanceCount,
@@ -139,6 +142,7 @@ export class AdminCompetitionsService {
       throw new BadRequestException('The time limit is longer than the competition itself');
     }
     await this.assertSubjects(dto.subjectIds ?? []);
+    if (dto.sponsorId) await this.assertSponsor(dto.sponsorId);
     if (dto.nextStageId) await this.assertStageLink({ id: 'new', status: 'DRAFT', startsAt, endsAt, nextStageId: dto.nextStageId, requiresQualification: !!dto.requiresQualification }, dto.nextStageId, dto.advanceCount);
     else if (dto.advanceCount) throw new BadRequestException('advanceCount only applies when there is a next stage');
 
@@ -167,6 +171,7 @@ export class AdminCompetitionsService {
         participationXp: dto.participationXp ?? 0,
         participationCoins: dto.participationCoins ?? 0,
         claimDeadlineDays: dto.claimDeadlineDays ?? 14,
+        sponsorId: dto.sponsorId ?? null,
         requiresQualification: dto.requiresQualification ?? false,
         nextStageId: dto.nextStageId ?? null,
         advanceCount: dto.nextStageId ? dto.advanceCount : null,
@@ -194,7 +199,7 @@ export class AdminCompetitionsService {
     const allowed: Record<string, string[]> = {
       wording: ['title', 'subtitle', 'description'],
       // Where the top finishers go next does not change how this one is played, so it can still be set.
-      schedule_and_prizes: ['title', 'subtitle', 'description', 'startsAt', 'endsAt', 'prizes', 'claimDeadlineDays', 'nextStageId', 'advanceCount'],
+      schedule_and_prizes: ['title', 'subtitle', 'description', 'startsAt', 'endsAt', 'prizes', 'claimDeadlineDays', 'nextStageId', 'advanceCount', 'sponsorId'],
     };
     if (level !== 'all') {
       const forbidden = touched.filter((k) => !allowed[level].includes(k));
@@ -214,6 +219,7 @@ export class AdminCompetitionsService {
     if (dto.type || dto.state !== undefined || dto.region) this.assertScope(type, state ?? undefined, region ?? undefined);
     const prizes = dto.prizes ? this.checkedPrizes(dto.prizes) : null;
     if (dto.subjectIds) await this.assertSubjects(dto.subjectIds);
+    if (dto.sponsorId) await this.assertSponsor(dto.sponsorId);
     const limitSec = dto.timeLimitMinutes ? dto.timeLimitMinutes * 60 : before.timeLimitSec;
     if (limitSec && limitSec * 1000 > endsAt.getTime() - startsAt.getTime()) {
       throw new BadRequestException('The time limit is longer than the competition itself');
@@ -258,6 +264,7 @@ export class AdminCompetitionsService {
           ...(dto.participationXp !== undefined && { participationXp: dto.participationXp }),
           ...(dto.participationCoins !== undefined && { participationCoins: dto.participationCoins }),
           ...(dto.claimDeadlineDays !== undefined && { claimDeadlineDays: dto.claimDeadlineDays }),
+          ...(dto.sponsorId !== undefined && { sponsorId: dto.sponsorId }),
           ...(dto.requiresQualification !== undefined && { requiresQualification: dto.requiresQualification }),
           ...((dto.nextStageId !== undefined || dto.advanceCount !== undefined) && { nextStageId: nextStageId ?? null, advanceCount }),
           ...(prizes && { prizes: prizes.map((p) => p.title) }),
@@ -425,6 +432,10 @@ export class AdminCompetitionsService {
 
   private prizeData(p: PrizeInputDto, i: number) {
     return { positionFrom: p.positionFrom, positionTo: p.positionTo, title: p.title.trim(), kind: p.kind, coinAmount: p.kind === 'COINS' ? (p.coinAmount ?? null) : null, sortOrder: i };
+  }
+
+  private async assertSponsor(id: string) {
+    if (!(await this.prisma.sponsor.findUnique({ where: { id }, select: { id: true } }))) throw new BadRequestException('That sponsor does not exist');
   }
 
   private async assertSubjects(ids: string[]) {

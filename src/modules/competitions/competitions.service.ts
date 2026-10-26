@@ -3,18 +3,19 @@ import { AttemptSource, Prisma, QuizSessionStatus } from '@prisma/client';
 import { lagosDate } from '../../common/time/lagos';
 import { publicName } from '../../common/names';
 import { PrismaService } from '../../database/prisma.service';
+import { publicSponsor, SPONSOR_SELECT } from '../sponsors/logo';
 import { NotificationsService } from '../notifications/notifications.service';
 import {
   checkEligibility, effectiveStatus, legacyStatus, LEAGUE_TIE_BREAK_TEXT, sittingDeadline, TIE_BREAK_TEXT,
 } from './competition-rules';
 import { CompetitionSittingsService } from './competition-sittings.service';
 
-type CompetitionRow = Prisma.CompetitionGetPayload<{ include: { prizeList: true; _count: { select: { participants: true } } } }>;
+type CompetitionRow = Prisma.CompetitionGetPayload<{ include: { prizeList: true; sponsor: { select: typeof SPONSOR_SELECT }; _count: { select: { participants: true } } } }>;
 
 /** How a student qualified for a stage, when they did. */
 type Qualification = { fromRank: number; fromCompetition: { title: string } };
 
-const WITH_PRIZES = { prizeList: { orderBy: { sortOrder: 'asc' } }, _count: { select: { participants: true } } } as const;
+const WITH_PRIZES = { prizeList: { orderBy: { sortOrder: 'asc' } }, sponsor: { select: SPONSOR_SELECT }, _count: { select: { participants: true } } } as const;
 
 /** Rows are not shown to students until published. */
 const VISIBLE = { status: { not: 'DRAFT' } } as const;
@@ -164,6 +165,8 @@ export class CompetitionsService {
       isJoined: !!entry,
       // The full lifecycle and the rest of what a student needs to decide.
       lifecycle: c.status,
+      // "Sponsored by": show the logo (the name is for its alt text).
+      sponsor: publicSponsor(c.sponsor),
       type: c.type,
       format: c.format,
       classLevels: c.classLevels,

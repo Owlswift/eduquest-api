@@ -58,6 +58,9 @@ export class CreateCompetitionDto {
   @IsOptional() @IsInt() @Min(0) @Max(5000) participationCoins?: number;
   @IsOptional() @IsInt() @Min(1) @Max(90) claimDeadlineDays?: number;
 
+  /** Shown as "Sponsored by" with the sponsor's logo. */
+  @IsOptional() @IsString() sponsorId?: string;
+
   // Stages. Leave out for an ordinary standalone competition.
   /** Entry only for students an earlier stage qualified (e.g. a national final). */
   @IsOptional() @IsBoolean() requiresQualification?: boolean;
@@ -98,6 +101,9 @@ export class UpdateCompetitionDto {
   @IsOptional() @IsInt() @Min(1) @Max(1000) pointsPerQuiz?: number;
   @IsOptional() @IsInt() @Min(1) @Max(100_000) dailyPointsCap?: number;
   @IsOptional() @IsInt() @Min(1) @Max(50) minQuestionsPerQuiz?: number;
+
+  /** Send null to remove the sponsor. */
+  @IsOptional() @IsString() sponsorId?: string | null;
 
   // Stages. Leave out for an ordinary standalone competition.
   /** Entry only for students an earlier stage qualified (e.g. a national final). */

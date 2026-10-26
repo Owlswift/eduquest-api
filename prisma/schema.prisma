@@ -660,6 +660,10 @@ model Competition {
   /// A quiz counts only if it had at least this many questions.
   minQuestionsPerQuiz Int @default(5)
 
+  /// Shown on the competition page as "Sponsored by" with the logo.
+  sponsorId String?
+  sponsor   Sponsor? @relation(fields: [sponsorId], references: [id], onDelete: SetNull)
+
   // Stages: a qualifier (e.g. a state round) can feed a later one (the national
   // final). Only students it qualified can enter a competition that
   // requires qualification.
@@ -690,6 +694,21 @@ model Competition {
   @@index([startsAt, endsAt])
   @@index([status])
   @@index([nextStageId])
+}
+
+/// A company or person that sponsors competitions. Students see the logo ("Sponsored by"), never contact details.
+model Sponsor {
+  id            String   @id @default(cuid())
+  /// For admins, and as the logo's alternative text.
+  name          String   @unique
+  websiteUrl    String?
+  /// The logo image itself (PNG, JPEG or WebP, a few hundred KB at most), served at /sponsors/:id/logo.
+  logoData      Bytes
+  logoType      String
+  logoUpdatedAt DateTime @default(now())
+  createdAt     DateTime @default(now())
+
+  competitions Competition[]
 }
 
 /// One quiz that was scored for a league. Unique per quiz session, so a quiz can never be counted twice.
