@@ -4,10 +4,12 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { ChallengeStatus, ClassLevel } from '@prisma/client';
+import { AttemptSource, ChallengeStatus, ClassLevel } from '@prisma/client';
 import { PrismaService } from '../../database/prisma.service';
 import { NotificationsService } from '../notifications/notifications.service';
+import { AchievementsService } from '../gamification/achievements.service';
 import { LedgerService } from '../ledger/ledger.service';
+import { AttemptsService } from '../progress/attempts.service';
 
 const DEFAULT_QUESTION_COUNT = 15;
 // Same rate as a regular quiz submission (see QuizService.submitQuizResults)
@@ -57,6 +59,8 @@ export class ChallengesService {
     private prisma: PrismaService,
     private notifications: NotificationsService,
     private ledger: LedgerService,
+    private attempts: AttemptsService,
+    private achievements: AchievementsService,
   ) {}
 
   // ─── POST /challenges ───────────────────────────────────────────────────────
@@ -492,6 +496,15 @@ export class ChallengesService {
       refType: 'challenge',
       refId: challengeId,
     });
+    await this.attempts.record(
+      userId,
+      AttemptSource.CHALLENGE,
+      challengeId,
+      challenge.questionIds.map((qid) => {
+        const chosen = picked.get(qid);
+        return { questionId: qid, selectedOptionId: chosen ? chosen : null, correct: chosen !== undefined && correctById.get(qid) === chosen };
+      }),
+    );
     // Same subject-accuracy tracking a regular quiz submission does -
     // feeds Challenge matchmaking regardless of which mode the student
     // actually answered questions through.
@@ -507,6 +520,13 @@ export class ChallengesService {
 
     if (finishedHere) {
       await this._finishChallenge(updated);
+      // A win may unlock an achievement for either player.
+      await Promise.all([
+        this.achievements.evaluate(updated.challengerId),
+        this.achievements.evaluate(updated.opponentId),
+      ]);
+    } else {
+      await this.achievements.evaluate(userId);
     }
 
     return {

@@ -20,7 +20,7 @@ describe('CertificatesService', () => {
       $transaction: jest.fn(),
     };
     notifications = { notify: jest.fn() };
-    service = new CertificatesService(prisma as any, notifications as any);
+    service = new CertificatesService(prisma as any, notifications as any, { evaluate: jest.fn().mockResolvedValue([]) } as any);
   });
 
   describe('checkAndAward', () => {

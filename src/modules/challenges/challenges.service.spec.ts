@@ -40,7 +40,13 @@ describe('ChallengesService', () => {
     prisma.subjectStat.upsert.mockResolvedValue({});
     notifications = { notify: jest.fn() };
     ledger = { grant: jest.fn().mockResolvedValue({ applied: true, xp: 0, coins: 0 }) };
-    service = new ChallengesService(prisma as any, notifications as any, ledger as any);
+    service = new ChallengesService(
+      prisma as any,
+      notifications as any,
+      ledger as any,
+      { record: jest.fn().mockResolvedValue(0) } as any,
+      { evaluate: jest.fn().mockResolvedValue([]) } as any,
+    );
   });
 
   describe('create', () => {

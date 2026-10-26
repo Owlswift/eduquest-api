@@ -5,8 +5,11 @@ import {
 } from '@nestjs/common';
 import { PrismaService } from '../../database/prisma.service';
 import { ActivityService } from '../activity/activity.service';
-import { LedgerService } from '../ledger/ledger.service';
-import { ClassLevel, LedgerCurrency, QuizSessionStatus } from '@prisma/client';
+import { GrantResult, LedgerService } from '../ledger/ledger.service';
+import { AttemptSource, ClassLevel, LedgerCurrency, QuizSessionStatus } from '@prisma/client';
+import { AchievementsService } from '../gamification/achievements.service';
+import { levelProgress } from '../gamification/levels';
+import { AttemptsService } from '../progress/attempts.service';
 
 /** XP and coins paid per correct answer. */
 export const QUIZ_XP_PER_CORRECT = 10;
@@ -35,6 +38,8 @@ export class QuizService {
     private prisma: PrismaService,
     private activity: ActivityService,
     private ledger: LedgerService,
+    private attempts: AttemptsService,
+    private achievements: AchievementsService,
   ) {}
 
   // ─── GET /quiz/questions ────────────────────────────────────────────────────
@@ -160,6 +165,7 @@ export class QuizService {
     userId: string,
     sessionId: string,
     submitted: { questionId: string; selectedOptionId: string }[],
+    source: AttemptSource = AttemptSource.QUIZ,
   ): Promise<GradedSession> {
     const session = await this._openSession(userId, sessionId);
 
@@ -185,6 +191,21 @@ export class QuizService {
       return chosen !== undefined && correctById.get(id) === chosen;
     });
 
+    // History for analytics, and the session's own score for achievements.
+    const correctSet = new Set(correctIds);
+    await Promise.all([
+      this.prisma.quizSession.update({ where: { id: sessionId }, data: { correctCount: correctIds.length } }),
+      this.attempts.record(
+        userId,
+        source,
+        sessionId,
+        session.questionIds.map((id) => {
+          const chosen = locked[id] ?? sent.get(id);
+          return { questionId: id, selectedOptionId: chosen ? chosen : null, correct: correctSet.has(id) };
+        }),
+      ),
+    ]);
+
     return {
       sessionId,
       subjectId: session.subjectId,
@@ -209,6 +230,7 @@ export class QuizService {
 
     let earnedXp = 0;
     let earnedCoins = 0;
+    const results: GrantResult[] = [];
     await this.prisma.$transaction(async (tx) => {
       for (const questionId of graded.correctIds) {
         if (roomXp < QUIZ_XP_PER_CORRECT) break;
@@ -224,6 +246,7 @@ export class QuizService {
           },
           tx,
         );
+        results.push(res);
         if (res.applied) {
           earnedXp += res.xp;
           earnedCoins += res.coins;
@@ -231,7 +254,9 @@ export class QuizService {
         }
       }
     });
-    return { earnedXp, earnedCoins };
+    const levelUp = LedgerService.mergeLevelUps(results);
+    if (levelUp) this.ledger.announceLevelUp(userId, levelUp);
+    return { earnedXp, earnedCoins, levelUp };
   }
 
   private async _openSession(userId: string, sessionId: string) {
@@ -335,6 +360,13 @@ export class QuizService {
     const nationalRank = aheadNationally + 1;
     const stateRank = aheadInState === null ? null : aheadInState + 1;
 
+    // Streak, answer counts and this quiz's score are all in now: see what it unlocked.
+    const unlocked = await this.achievements.evaluate(userId);
+    const fresh = await this.prisma.user.findUniqueOrThrow({
+      where: { id: userId },
+      select: { coins: true, xp: true },
+    });
+
     return {
       earnedCoins,
       earnedXp,
@@ -342,8 +374,10 @@ export class QuizService {
       correctAnswers,
       nationalRank,
       stateRank,
-      totalCoins: user.coins,
-      totalXp: user.xp,
+      totalCoins: fresh.coins,
+      totalXp: fresh.xp,
+      level: levelProgress(fresh.xp),
+      newAchievements: unlocked.map((a) => ({ key: a.key, name: a.name, description: a.description, icon: a.icon })),
     };
   }
 

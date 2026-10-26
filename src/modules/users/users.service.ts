@@ -3,7 +3,10 @@ import * as argon2 from 'argon2';
 import { PrismaService } from '../../database/prisma.service';
 import { ActivityService } from '../activity/activity.service';
 import { NotificationsService } from '../notifications/notifications.service';
-import { LedgerService } from '../ledger/ledger.service';
+import { AttemptSource } from '@prisma/client';
+import { AchievementsService } from '../gamification/achievements.service';
+import { levelProgress } from '../gamification/levels';
+import { GrantResult, LedgerService } from '../ledger/ledger.service';
 import { QuizService } from '../quiz/quiz.service';
 import { UpdateProfileDto } from './dto/update-profile.dto';
 
@@ -15,6 +18,7 @@ export class UsersService {
     private notifications: NotificationsService,
     private ledger: LedgerService,
     private quiz: QuizService,
+    private achievements: AchievementsService,
   ) {}
 
   // ─── Get profile ────────────────────────────────────────────────────────────
@@ -41,6 +45,7 @@ export class UsersService {
         badges: true,
         certificates: true,
         streak: true,
+        longestStreak: true,
         questionsAnswered: true,
         accuracy: true,
         timeSpent: true,
@@ -53,6 +58,7 @@ export class UsersService {
 
     return {
       ...user,
+      levelInfo: levelProgress(user.xp),
       // Parse interests back from JSON string to array
       interests: user.interests ? JSON.parse(user.interests) : [],
       // Parse subjects back from JSON string to array
@@ -203,7 +209,7 @@ export class UsersService {
 
     // Grade server-side against the questions the server issued for this
     // session, same as the main quiz - never a client-reported count.
-    const graded = await this.quiz.gradeAndCloseSession(userId, sessionId, answers);
+    const graded = await this.quiz.gradeAndCloseSession(userId, sessionId, answers, AttemptSource.STARTER);
 
     // The completion flag is the one-time gate for the badge and rewards.
     const gate = await this.prisma.user.updateMany({
@@ -220,6 +226,7 @@ export class UsersService {
 
     let earnedXp = 0;
     let earnedCoins = 0;
+    const grants: GrantResult[] = [];
     await this.prisma.$transaction(async (tx) => {
       for (const questionId of rewarded) {
         const res = await this.ledger.grant(
@@ -234,35 +241,28 @@ export class UsersService {
           },
           tx,
         );
+        grants.push(res);
         earnedXp += res.xp;
         earnedCoins += res.coins;
       }
     });
+    const levelUp = LedgerService.mergeLevelUps(grants);
+    if (levelUp) this.ledger.announceLevelUp(userId, levelUp);
 
-    const user = await this.prisma.user.update({
+    await this.prisma.user.update({
       where: { id: userId },
-      data: {
-        questionsAnswered: { increment: questionsAnswered },
-        badges: { increment: 1 }, // First Steps badge
-      },
-      select: {
-        id: true,
-        coins: true,
-        xp: true,
-        questionsAnswered: true,
-        badges: true,
-        state: true,
-      },
+      data: { questionsAnswered: { increment: questionsAnswered } },
     });
 
     await this.activity.recordQuestions(userId, questionsAnswered);
     await this.activity.recordXp(userId, earnedXp);
-    await this.notifications.notify(
-      userId,
-      'badge_earned',
-      '🏅 First Steps badge earned!',
-      `You got ${correctAnswers}/${questionsAnswered} right on your starter challenge.`,
-    );
+    // First Steps and anything else this unlocked (it notifies the student itself).
+    const unlocked = await this.achievements.evaluate(userId);
+
+    const user = await this.prisma.user.findUniqueOrThrow({
+      where: { id: userId },
+      select: { id: true, coins: true, xp: true, questionsAnswered: true, badges: true, state: true },
+    });
 
     const { nationalRank, stateRank } = await this._ranksFor(user.id, user.xp, user.state);
 
@@ -274,6 +274,8 @@ export class UsersService {
       correctAnswers,
       nationalRank,
       stateRank,
+      level: levelProgress(user.xp),
+      newAchievements: unlocked.map((x) => ({ key: x.key, name: x.name, description: x.description, icon: x.icon })),
     };
   }
 

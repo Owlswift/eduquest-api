@@ -1,6 +1,7 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
 import { LedgerCurrency, Prisma } from '@prisma/client';
 import { PrismaService } from '../../database/prisma.service';
+import { levelForXp, xpToReachLevel } from '../gamification/levels';
 
 type Db = Prisma.TransactionClient;
 
@@ -26,7 +27,11 @@ export interface GrantResult {
   applied: boolean;
   xp: number;
   coins: number;
+  /** Set when this grant carried the student into a higher level. */
+  levelUp?: { from: number; to: number };
 }
+
+export type LevelUpListener = (event: { userId: string; from: number; to: number }) => void | Promise<void>;
 
 /**
  * The only place `User.xp` / `User.coins` are changed. Every change is a
@@ -36,7 +41,16 @@ export interface GrantResult {
  */
 @Injectable()
 export class LedgerService {
+  private levelUpListeners: LevelUpListener[] = [];
+
   constructor(private prisma: PrismaService) {}
+
+  /** Register a callback for level-ups (notifications, achievements). It runs
+   *  after the grant's own database work; failures in a listener never fail
+   *  the grant. */
+  onLevelUp(listener: LevelUpListener): void {
+    this.levelUpListeners.push(listener);
+  }
 
   /**
    * Credit XP and/or coins exactly once per `key`. Pass `tx` to run inside a
@@ -45,7 +59,28 @@ export class LedgerService {
    */
   async grant(input: GrantInput, tx?: Db): Promise<GrantResult> {
     const run = (db: Db) => this.grantIn(db, input);
-    return tx ? run(tx) : this.prisma.$transaction(run);
+    if (tx) return run(tx); // the caller announces any level-up once it commits
+    const result = await this.prisma.$transaction(run);
+    if (result.levelUp) this.announceLevelUp(input.userId, result.levelUp);
+    return result;
+  }
+
+  /** Folds the level-ups of several grants made in one transaction into one
+   *  event (first `from`, last `to`). */
+  static mergeLevelUps(results: GrantResult[]): GrantResult['levelUp'] {
+    const ups = results.map((r) => r.levelUp).filter((u): u is { from: number; to: number } => !!u);
+    return ups.length ? { from: ups[0].from, to: ups[ups.length - 1].to } : undefined;
+  }
+
+  /** Tell listeners a student levelled up. Call it AFTER the transaction that
+   *  granted the XP has committed (grant() does this itself when it owns the
+   *  transaction). */
+  announceLevelUp(userId: string, e: { from: number; to: number }) {
+    for (const listener of this.levelUpListeners) {
+      Promise.resolve()
+        .then(() => listener({ userId, ...e }))
+        .catch(() => undefined);
+    }
   }
 
   /**
@@ -131,15 +166,27 @@ export class LedgerService {
       }
     }
 
+    let levelUp: GrantResult['levelUp'];
     if (appliedXp > 0 || appliedCoins > 0) {
-      await db.user.update({
+      const user = await db.user.update({
         where: { id: input.userId },
         data: {
           ...(appliedXp > 0 && { xp: { increment: appliedXp } }),
           ...(appliedCoins > 0 && { coins: { increment: appliedCoins } }),
         },
+        select: { xp: true, level: true },
       });
+      // The level follows the XP total in the same transaction, so the two
+      // can never disagree.
+      const newLevel = levelForXp(user.xp);
+      if (newLevel !== user.level) {
+        await db.user.update({
+          where: { id: input.userId },
+          data: { level: newLevel, maxXp: xpToReachLevel(newLevel + 1) },
+        });
+        if (newLevel > user.level) levelUp = { from: user.level, to: newLevel };
+      }
     }
-    return { applied: appliedXp > 0 || appliedCoins > 0, xp: appliedXp, coins: appliedCoins };
+    return { applied: appliedXp > 0 || appliedCoins > 0, xp: appliedXp, coins: appliedCoins, levelUp };
   }
 }

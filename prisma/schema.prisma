@@ -68,6 +68,14 @@ enum QuizSessionStatus {
   SUBMITTED
 }
 
+enum AttemptSource {
+  QUIZ
+  STARTER
+  CHALLENGE
+  DAILY
+  EXAM
+}
+
 enum LessonState {
   INTRODUCTION
   ASSESS_PRIOR_KNOWLEDGE
@@ -111,6 +119,8 @@ model User {
   badges       Int        @default(0)
   certificates Int        @default(0)
   streak       Int        @default(0)
+  /// Highest `streak` ever reached; only ever raised.
+  longestStreak Int       @default(0)
   questionsAnswered Int   @default(0)
   accuracy     Float      @default(0.0)
   timeSpent    Int        @default(0)
@@ -126,6 +136,8 @@ model User {
 
   quizSessions         QuizSession[]
   ledgerEntries        LedgerEntry[]
+  questionAttempts     QuestionAttempt[]
+  achievements         UserAchievement[]
   tutorSessions        TutorSession[]
   studentMastery       StudentMastery[]
   dailyActivities      DailyActivity[]
@@ -164,6 +176,47 @@ model LedgerEntry {
   @@index([userId, reason, createdAt])
 }
 
+/// One graded answer to one question, kept for history and analytics
+/// (topic accuracy, weak topics, exam review). Written when a session,
+/// challenge or exam is graded. `selectedOptionId` is null when the question
+/// was left unanswered. `subjectId` and `topic` are copied from the question
+/// so analytics don't need a join.
+model QuestionAttempt {
+  id               String        @id @default(cuid())
+  userId           String
+  questionId       String
+  subjectId        String
+  topic            String?
+  selectedOptionId String?
+  correct          Boolean
+  source           AttemptSource
+  /// Id of the session / challenge / exam this answer belongs to.
+  sourceRefId      String
+  createdAt        DateTime      @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, sourceRefId, questionId])
+  @@index([userId, subjectId, createdAt])
+  @@index([userId, subjectId, topic])
+  @@index([questionId])
+}
+
+/// An achievement a student has unlocked. The catalogue (names, criteria,
+/// rewards) lives in code (`achievements.catalog.ts`); this row is the
+/// verified, server-side record that it was earned.
+model UserAchievement {
+  id         String   @id @default(cuid())
+  userId     String
+  key        String
+  unlockedAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, key])
+  @@index([userId])
+}
+
 /// A server-issued set of quiz questions. Rewards are only ever paid
 /// against a session: the client can't choose which questions count, and
 /// a session can be submitted exactly once. `answers` holds
@@ -177,6 +230,8 @@ model QuizSession {
   questionIds String[]
   answers     Json              @default("{}")
   status      QuizSessionStatus @default(OPEN)
+  /// Number answered correctly; set when the session is graded.
+  correctCount Int              @default(0)
 
   createdAt   DateTime  @default(now())
   submittedAt DateTime?

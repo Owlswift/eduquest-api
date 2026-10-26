@@ -4,6 +4,8 @@ import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
 import { ConfigModule } from '@nestjs/config';
 import { PrismaModule } from './database/prisma.module';
 import { LedgerModule } from './modules/ledger/ledger.module';
+import { GamificationModule } from './modules/gamification/gamification.module';
+import { ProgressModule } from './modules/progress/progress.module';
 import { HealthModule } from './modules/health/health.module';
 import { AuthModule } from './modules/auth/auth.module';
 import { UsersModule } from './modules/users/users.module';
@@ -29,6 +31,8 @@ import { AdminModule } from './modules/admin/admin.module';
     ThrottlerModule.forRoot([{ name: 'default', ttl: 60_000, limit: 120 }]),
     PrismaModule,
     LedgerModule,
+    GamificationModule,
+    ProgressModule,
     MailerModule,
     PushModule,
     NotificationsModule,

@@ -1,5 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../../database/prisma.service';
+import { AchievementsService } from '../gamification/achievements.service';
 import { NotificationsService } from '../notifications/notifications.service';
 
 @Injectable()
@@ -12,6 +13,7 @@ export class CertificatesService {
   constructor(
     private prisma: PrismaService,
     private notifications: NotificationsService,
+    private achievements: AchievementsService,
   ) {}
 
   // ─── GET /certificates ──────────────────────────────────────────────────────
@@ -66,5 +68,6 @@ export class CertificatesService {
       `You earned a certificate in ${subjectName} for reaching ${CertificatesService.MASTERY_THRESHOLD}%+ mastery.`,
       { subjectId },
     );
+    await this.achievements.evaluate(userId); // Topic Expert
   }
 }

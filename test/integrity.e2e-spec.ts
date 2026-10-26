@@ -16,6 +16,8 @@ import { QuizService, QUIZ_DAILY_REWARD_CAP } from '../src/modules/quiz/quiz.ser
 import { REWARDS_CATALOG } from '../src/modules/rewards/rewards.catalog';
 import { RewardsService } from '../src/modules/rewards/rewards.service';
 import { UsersService } from '../src/modules/users/users.service';
+import { AchievementsService } from '../src/modules/gamification/achievements.service';
+import { AttemptsService } from '../src/modules/progress/attempts.service';
 
 const url = process.env.TEST_DATABASE_URL;
 const d = url ? describe : describe.skip;
@@ -83,10 +85,13 @@ d('integrity (real database)', () => {
     await prisma.$connect();
     ledger = new LedgerService(prisma);
     const activity = new ActivityService(prisma);
-    quiz = new QuizService(prisma, activity, ledger);
+    const attempts = new AttemptsService(prisma);
+    // Achievement rewards add XP of their own; they are covered in progression.e2e-spec.ts.
+    const achievements = { evaluate: async () => [] } as unknown as AchievementsService;
+    quiz = new QuizService(prisma, activity, ledger, attempts, achievements);
     rewards = new RewardsService(prisma, notifications as any, ledger);
-    users = new UsersService(prisma, activity, notifications as any, ledger, quiz);
-    challenges = new ChallengesService(prisma, notifications as any, ledger);
+    users = new UsersService(prisma, activity, notifications as any, ledger, quiz, achievements);
+    challenges = new ChallengesService(prisma, notifications as any, ledger, attempts, achievements);
     await prisma.subject.create({ data: { id: subjectId, name: tag, icon: 'i', color: '#000' } });
   });
 
@@ -189,7 +194,7 @@ d('integrity (real database)', () => {
       const b = await balances(u);
       expect(b.xp).toBe(100);
       expect(b.xp).toBe(b.ledgerXp);
-      expect((await prisma.user.findUniqueOrThrow({ where: { id: u } })).badges).toBe(1);
+      expect((await prisma.user.findUniqueOrThrow({ where: { id: u } })).starterChallengeCompletedAt).not.toBeNull();
     });
   });
 

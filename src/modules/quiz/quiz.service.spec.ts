@@ -10,13 +10,16 @@ describe('QuizService', () => {
       findFirst: jest.Mock;
       findUniqueOrThrow: jest.Mock;
       updateMany: jest.Mock;
+      update: jest.Mock;
     };
-    user: { update: jest.Mock; findUnique: jest.Mock; count: jest.Mock };
+    user: { update: jest.Mock; findUnique: jest.Mock; findUniqueOrThrow: jest.Mock; count: jest.Mock };
     subjectStat: { upsert: jest.Mock };
     $executeRaw: jest.Mock;
   };
   let activity: { recordQuestions: jest.Mock; recordXp: jest.Mock };
   let ledger: { grant: jest.Mock; sumSince: jest.Mock };
+  let attempts: { record: jest.Mock };
+  let achievements: { evaluate: jest.Mock };
   let service: QuizService;
 
   const openSession = (over: Record<string, unknown> = {}) => ({
@@ -39,14 +42,17 @@ describe('QuizService', () => {
         findFirst: jest.fn(),
         findUniqueOrThrow: jest.fn(),
         updateMany: jest.fn(),
+        update: jest.fn().mockResolvedValue({}),
       },
-      user: { update: jest.fn(), findUnique: jest.fn(), count: jest.fn() },
+      user: { update: jest.fn(), findUnique: jest.fn(), findUniqueOrThrow: jest.fn(), count: jest.fn() },
       subjectStat: { upsert: jest.fn().mockResolvedValue({}) },
       $executeRaw: jest.fn().mockResolvedValue(1),
     };
     activity = { recordQuestions: jest.fn(), recordXp: jest.fn() };
     ledger = { grant: jest.fn(), sumSince: jest.fn().mockResolvedValue(0) };
-    service = new QuizService(prisma as any, activity as any, ledger as any);
+    attempts = { record: jest.fn().mockResolvedValue(0) };
+    achievements = { evaluate: jest.fn().mockResolvedValue([]) };
+    service = new QuizService(prisma as any, activity as any, ledger as any, attempts as any, achievements as any);
   });
 
   describe('getRandomQuestions', () => {
@@ -184,6 +190,25 @@ describe('QuizService', () => {
       expect(graded.correctIds).toEqual([]);
     });
 
+    it('records one attempt per issued question and the session score', async () => {
+      prisma.quizSession.findFirst.mockResolvedValue(openSession());
+
+      await service.gradeAndCloseSession('u1', 's1', [
+        { questionId: 'q1', selectedOptionId: 'a' }, // right
+        { questionId: 'q2', selectedOptionId: 'x' }, // wrong
+      ]);
+
+      expect(prisma.quizSession.update).toHaveBeenCalledWith({
+        where: { id: 's1' },
+        data: { correctCount: 1 },
+      });
+      expect(attempts.record).toHaveBeenCalledWith('u1', 'QUIZ', 's1', [
+        { questionId: 'q1', selectedOptionId: 'a', correct: true },
+        { questionId: 'q2', selectedOptionId: 'x', correct: false },
+        { questionId: 'q3', selectedOptionId: null, correct: false },
+      ]);
+    });
+
     it('cannot count the same question twice', async () => {
       prisma.quizSession.findFirst.mockResolvedValue(openSession());
 
@@ -216,7 +241,7 @@ describe('QuizService', () => {
 
     beforeEach(() => {
       jest.spyOn(service, 'gradeAndCloseSession').mockResolvedValue(graded);
-      jest.spyOn(service, 'rewardQuizCorrects').mockResolvedValue({ earnedXp: 20, earnedCoins: 20 });
+      jest.spyOn(service, 'rewardQuizCorrects').mockResolvedValue({ earnedXp: 20, earnedCoins: 20, levelUp: undefined });
       prisma.user.update.mockResolvedValue({
         id: 'u1',
         coins: 120,
@@ -225,6 +250,7 @@ describe('QuizService', () => {
         state: null,
       });
       prisma.user.findUnique.mockResolvedValue({ accuracy: 0, questionsAnswered: 0 });
+      prisma.user.findUniqueOrThrow.mockResolvedValue({ coins: 120, xp: 120 });
       prisma.user.count.mockResolvedValue(0);
     });
 
@@ -244,6 +270,21 @@ describe('QuizService', () => {
       const data = prisma.user.update.mock.calls[0][0].data;
       expect(data).not.toHaveProperty('coins');
       expect(data).not.toHaveProperty('xp');
+    });
+
+    it('returns the level and any newly unlocked achievements', async () => {
+      achievements.evaluate.mockResolvedValue([
+        { key: 'first_steps', name: 'First Steps', description: 'Finish your first quiz', icon: 'level1_badge' },
+      ]);
+      prisma.user.findUniqueOrThrow.mockResolvedValue({ coins: 120, xp: 520 });
+
+      const result = await service.submitQuizResults('u1', { sessionId: 's1', answers: [], timeTaken: 5 });
+
+      expect(result.level).toMatchObject({ level: 2, xpIntoLevel: 20 });
+      expect(result.newAchievements).toEqual([
+        { key: 'first_steps', name: 'First Steps', description: 'Finish your first quiz', icon: 'level1_badge' },
+      ]);
+      expect(result.totalXp).toBe(520);
     });
 
     it('computes real national/state ranks by XP', async () => {

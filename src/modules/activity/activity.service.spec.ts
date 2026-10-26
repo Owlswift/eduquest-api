@@ -7,7 +7,7 @@ const day = (y: number, m: number, d: number) =>
 describe('ActivityService', () => {
   let prisma: {
     dailyActivity: { findMany: jest.Mock; upsert: jest.Mock };
-    user: { update: jest.Mock; findUnique: jest.Mock };
+    user: { update: jest.Mock; updateMany: jest.Mock; findUnique: jest.Mock };
   };
   let service: ActivityService;
 
@@ -16,7 +16,11 @@ describe('ActivityService', () => {
     jest.useFakeTimers().setSystemTime(new Date('2026-06-17T10:00:00Z'));
     prisma = {
       dailyActivity: { findMany: jest.fn(), upsert: jest.fn() },
-      user: { update: jest.fn().mockResolvedValue({}), findUnique: jest.fn() },
+      user: {
+        update: jest.fn().mockResolvedValue({ longestStreak: 0 }),
+        updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+        findUnique: jest.fn(),
+      },
     };
     service = new ActivityService(prisma as any);
   });
@@ -37,7 +41,22 @@ describe('ActivityService', () => {
       expect(prisma.user.update).toHaveBeenCalledWith({
         where: { id: 'u1' },
         data: { streak: 3 },
+        select: { longestStreak: true },
       });
+      // A new record is stored, conditionally so it can only ever go up.
+      expect(prisma.user.updateMany).toHaveBeenCalledWith({
+        where: { id: 'u1', longestStreak: { lt: 3 } },
+        data: { longestStreak: 3 },
+      });
+    });
+
+    it('never lowers the longest streak', async () => {
+      prisma.user.update.mockResolvedValue({ longestStreak: 12 });
+      prisma.dailyActivity.findMany.mockResolvedValue([{ date: day(2026, 6, 17) }]);
+
+      await service.recomputeStreak('u1');
+
+      expect(prisma.user.updateMany).not.toHaveBeenCalled();
     });
 
     it('still counts the run when today has no activity yet', async () => {
@@ -73,11 +92,12 @@ describe('ActivityService', () => {
         { date: day(2026, 6, 16), questionsAnswered: 0, lessonsStudied: 2 }, // Tue
         { date: day(2026, 6, 17), questionsAnswered: 10, lessonsStudied: 0 }, // Wed (today)
       ]);
-      prisma.user.findUnique.mockResolvedValue({ streak: 3 });
+      prisma.user.findUnique.mockResolvedValue({ streak: 3, longestStreak: 9 });
 
       const summary = await service.getDailySummary('u1');
 
       expect(summary.streak).toBe(3);
+      expect(summary.longestStreak).toBe(9);
       expect(summary.week.map((d) => d.weekday)).toEqual([
         'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun',
       ]);
@@ -125,6 +145,7 @@ describe('ActivityService', () => {
       expect(prisma.user.update).toHaveBeenCalledWith({
         where: { id: 'u1' },
         data: { streak: 1 },
+        select: { longestStreak: true },
       });
     });
   });

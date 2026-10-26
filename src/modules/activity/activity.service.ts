@@ -113,10 +113,18 @@ export class ActivityService {
       cursor = this.addDays(cursor, -1);
     }
 
-    await this.prisma.user.update({
+    const user = await this.prisma.user.update({
       where: { id: userId },
       data: { streak },
+      select: { longestStreak: true },
     });
+    // Only ever raised: the 60-day lookback above must not shrink the record.
+    if (streak > user.longestStreak) {
+      await this.prisma.user.updateMany({
+        where: { id: userId, longestStreak: { lt: streak } },
+        data: { longestStreak: streak },
+      });
+    }
     return streak;
   }
 
@@ -139,7 +147,7 @@ export class ActivityService {
       }),
       this.prisma.user.findUnique({
         where: { id: userId },
-        select: { streak: true },
+        select: { streak: true, longestStreak: true },
       }),
     ]);
 
@@ -160,6 +168,7 @@ export class ActivityService {
 
     return {
       streak: user?.streak ?? 0,
+      longestStreak: Math.max(user?.longestStreak ?? 0, user?.streak ?? 0),
       goal: {
         target,
         answeredToday,

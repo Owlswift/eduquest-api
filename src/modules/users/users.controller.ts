@@ -32,7 +32,10 @@ export class UsersController {
       xp: userData.xp,
       maxXp: userData.maxXp,
       level: userData.level,
+      // Level, title and progress through it (see gamification/levels.ts).
+      levelInfo: userData.levelInfo,
       streak: userData.streak,
+      longestStreak: userData.longestStreak,
       badges: userData.badges,
       certificates: userData.certificates,
       questionsAnswered: userData.questionsAnswered,

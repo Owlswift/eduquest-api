@@ -14,7 +14,7 @@ describe('UsersService.getLeaderboard', () => {
       user: { findMany: jest.fn(), findUnique: jest.fn(), count: jest.fn() },
       dailyActivity: { groupBy: jest.fn() },
     };
-    service = new UsersService(prisma as any, {} as any, {} as any, {} as any, {} as any);
+    service = new UsersService(prisma as any, {} as any, {} as any, {} as any, {} as any, {} as any);
   });
 
 
@@ -95,7 +95,7 @@ describe('UsersService.getSubjectProgress', () => {
       studentMastery: { groupBy: jest.fn() },
       subject: { findMany: jest.fn() },
     };
-    service = new UsersService(prisma as any, {} as any, {} as any, {} as any, {} as any);
+    service = new UsersService(prisma as any, {} as any, {} as any, {} as any, {} as any, {} as any);
   });
 
   it('averages mastery per subject, sorted highest first', async () => {
@@ -140,6 +140,7 @@ describe('UsersService.completeStarterChallenge', () => {
   let notifications: { notify: jest.Mock };
   let ledger: { grant: jest.Mock };
   let quiz: { gradeAndCloseSession: jest.Mock };
+  let achievements: { evaluate: jest.Mock };
   let service: UsersService;
 
   const graded = (correctIds: string[], total = 2) => ({
@@ -160,15 +161,13 @@ describe('UsersService.completeStarterChallenge', () => {
       $transaction: jest.fn(),
     };
     prisma.$transaction.mockImplementation((cb: any) => cb({}));
-    prisma.user.update.mockResolvedValue({
-      id: 'u1',
-      coins: 10,
-      xp: 100,
-      questionsAnswered: 2,
-      badges: 1,
-      state: null,
-    });
+    prisma.user.update.mockResolvedValue({});
+    // 1st call: the "already completed?" pre-check; later calls: the final read.
+    prisma.user.findUniqueOrThrow
+      .mockResolvedValueOnce({ starterChallengeCompletedAt: null })
+      .mockResolvedValue({ id: 'u1', coins: 10, xp: 100, questionsAnswered: 2, badges: 1, state: null });
     prisma.user.count.mockResolvedValue(2);
+    achievements = { evaluate: jest.fn().mockResolvedValue([]) };
     activity = { recordQuestions: jest.fn(), recordXp: jest.fn() };
     notifications = { notify: jest.fn() };
     ledger = { grant: jest.fn().mockResolvedValue({ applied: true, xp: 10, coins: 10 }) };
@@ -179,6 +178,7 @@ describe('UsersService.completeStarterChallenge', () => {
       notifications as any,
       ledger as any,
       quiz as any,
+      achievements as any,
     );
   });
 
@@ -189,7 +189,7 @@ describe('UsersService.completeStarterChallenge', () => {
     ];
     const result = await service.completeStarterChallenge('u1', 's1', answers);
 
-    expect(quiz.gradeAndCloseSession).toHaveBeenCalledWith('u1', 's1', answers);
+    expect(quiz.gradeAndCloseSession).toHaveBeenCalledWith('u1', 's1', answers, 'STARTER');
     expect(ledger.grant).toHaveBeenCalledTimes(1);
     expect(ledger.grant).toHaveBeenCalledWith(
       expect.objectContaining({ userId: 'u1', xp: 10, coins: 10, key: 'starter:u1:q1' }),
@@ -200,15 +200,24 @@ describe('UsersService.completeStarterChallenge', () => {
     expect(result.earnedXp).toBe(10);
     expect(result.questionsAnsweredInChallenge).toBe(2);
     expect(activity.recordXp).toHaveBeenCalledWith('u1', 10);
-    expect(notifications.notify).toHaveBeenCalledWith(
-      'u1',
-      'badge_earned',
-      expect.any(String),
-      expect.any(String),
-    );
+    // Badges now come from the achievements engine, which notifies by itself.
+    expect(achievements.evaluate).toHaveBeenCalledWith('u1');
+    expect(notifications.notify).not.toHaveBeenCalled();
+  });
+
+  it('returns what the starter challenge unlocked and the new level', async () => {
+    achievements.evaluate.mockResolvedValue([
+      { key: 'first_steps', name: 'First Steps', description: 'd', icon: 'level1_badge' },
+    ]);
+    const result = await service.completeStarterChallenge('u1', 's1', []);
+    expect(result.newAchievements).toEqual([
+      { key: 'first_steps', name: 'First Steps', description: 'd', icon: 'level1_badge' },
+    ]);
+    expect(result.level.level).toBe(1);
   });
 
   it('can only be completed once per account', async () => {
+    prisma.user.findUniqueOrThrow.mockReset();
     prisma.user.findUniqueOrThrow.mockResolvedValue({ starterChallengeCompletedAt: new Date() });
 
     await expect(service.completeStarterChallenge('u1', 's1', [])).rejects.toBeInstanceOf(
@@ -243,14 +252,10 @@ describe('UsersService.completeStarterChallenge', () => {
   });
 
   it('computes real ranks by XP instead of the old Math.random() placeholders', async () => {
-    prisma.user.update.mockResolvedValue({
-      id: 'u1',
-      coins: 10,
-      xp: 100,
-      questionsAnswered: 2,
-      badges: 1,
-      state: 'Lagos',
-    });
+    prisma.user.findUniqueOrThrow.mockReset();
+    prisma.user.findUniqueOrThrow
+      .mockResolvedValueOnce({ starterChallengeCompletedAt: null })
+      .mockResolvedValue({ id: 'u1', coins: 10, xp: 100, questionsAnswered: 2, badges: 1, state: 'Lagos' });
     // First count() call = national (STUDENT, xp > 100); second = same-state.
     prisma.user.count.mockReset();
     prisma.user.count.mockResolvedValueOnce(4).mockResolvedValueOnce(1);
@@ -295,6 +300,7 @@ describe('UsersService.claimWelcomeBonus', () => {
       notifications as any,
       ledger as any,
       {} as any,
+      {} as any,
     );
   });
 
@@ -334,7 +340,7 @@ describe('UsersService.changePassword', () => {
 
   beforeEach(() => {
     prisma = { user: { findUnique: jest.fn(), update: jest.fn() } };
-    service = new UsersService(prisma as any, {} as any, {} as any, {} as any, {} as any);
+    service = new UsersService(prisma as any, {} as any, {} as any, {} as any, {} as any, {} as any);
   });
 
   it('changes the password when the current one is correct', async () => {
@@ -372,7 +378,7 @@ describe('UsersService.changePassword', () => {
 describe('UsersService.deleteAccount', () => {
   it('deletes the user row (cascades handle the rest)', async () => {
     const prisma = { user: { delete: jest.fn().mockResolvedValue({}) } };
-    const service = new UsersService(prisma as any, {} as any, {} as any, {} as any, {} as any);
+    const service = new UsersService(prisma as any, {} as any, {} as any, {} as any, {} as any, {} as any);
 
     const result = await service.deleteAccount('u1');
 
@@ -393,7 +399,7 @@ describe('UsersService.searchStudents', () => {
       user: { findUnique: jest.fn(), findMany: jest.fn() },
       challenge: { findMany: jest.fn() },
     };
-    service = new UsersService(prisma as any, {} as any, {} as any, {} as any, {} as any);
+    service = new UsersService(prisma as any, {} as any, {} as any, {} as any, {} as any, {} as any);
   });
 
   it('returns nothing for a query shorter than 2 characters', async () => {
