@@ -7,6 +7,7 @@ import {
 import { ChallengeStatus, ClassLevel } from '@prisma/client';
 import { PrismaService } from '../../database/prisma.service';
 import { NotificationsService } from '../notifications/notifications.service';
+import { LedgerService } from '../ledger/ledger.service';
 
 const DEFAULT_QUESTION_COUNT = 15;
 // Same rate as a regular quiz submission (see QuizService.submitQuizResults)
@@ -55,6 +56,7 @@ export class ChallengesService {
   constructor(
     private prisma: PrismaService,
     private notifications: NotificationsService,
+    private ledger: LedgerService,
   ) {}
 
   // ─── POST /challenges ───────────────────────────────────────────────────────
@@ -425,53 +427,85 @@ export class ChallengesService {
     }
 
     // Grade server-side against the real answer key - never trust a
-    // client-reported score.
+    // client-reported score. Only the challenge's own questions count, and
+    // each at most once (a repeated question id can't inflate the score).
     const questions = await this.prisma.question.findMany({
       where: { id: { in: challenge.questionIds } },
       select: { id: true, correctAnswerId: true },
     });
     const correctById = new Map(questions.map((q) => [q.id, q.correctAnswerId]));
-    const score = answers.filter(
-      (a) => correctById.get(a.questionId) === a.selectedOptionId,
-    ).length;
-    const answersMap = Object.fromEntries(answers.map((a) => [a.questionId, a.selectedOptionId]));
+    const picked = new Map<string, string>();
+    for (const a of answers) {
+      if (correctById.has(a.questionId) && !picked.has(a.questionId)) {
+        picked.set(a.questionId, a.selectedOptionId);
+      }
+    }
+    const score = [...picked].filter(([qid, opt]) => correctById.get(qid) === opt).length;
+    const answersMap = Object.fromEntries(picked);
 
     const now = new Date();
-    const otherDone =
-      role === 'challenger' ? challenge.opponentCompletedAt : challenge.challengerCompletedAt;
-    const bothDone = !!otherDone;
-
-    const data: any =
+    const mine =
       role === 'challenger'
         ? { challengerAnswers: answersMap, challengerScore: score, challengerCompletedAt: now }
         : { opponentAnswers: answersMap, opponentScore: score, opponentCompletedAt: now };
-    if (bothDone) {
-      data.status = ChallengeStatus.COMPLETED;
-      data.completedAt = now;
+
+    // Claim this player's submission with a conditional write: the row only
+    // matches while they haven't submitted, so a double-tap or replay loses
+    // the race instead of being graded and paid twice.
+    const claimed = await this.prisma.challenge.updateMany({
+      where: {
+        id: challengeId,
+        status: ChallengeStatus.ACTIVE,
+        ...(role === 'challenger' ? { challengerCompletedAt: null } : { opponentCompletedAt: null }),
+      },
+      data: mine,
+    });
+    if (claimed.count === 0) {
+      throw new BadRequestException('You already submitted your answers for this challenge');
     }
 
-    const updated = await this.prisma.challenge.update({ where: { id: challengeId }, data });
+    // Whoever submits second completes the challenge. Checked on the fresh
+    // row (not the pre-read) so two near-simultaneous submissions still
+    // finish it exactly once.
+    let updated = await this.prisma.challenge.findUniqueOrThrow({ where: { id: challengeId } });
+    const bothDone = !!(updated.challengerCompletedAt && updated.opponentCompletedAt);
+    let finishedHere = false;
+    if (bothDone) {
+      const done = await this.prisma.challenge.updateMany({
+        where: { id: challengeId, status: ChallengeStatus.ACTIVE },
+        data: { status: ChallengeStatus.COMPLETED, completedAt: now },
+      });
+      finishedHere = done.count === 1;
+      if (finishedHere) {
+        updated = await this.prisma.challenge.findUniqueOrThrow({ where: { id: challengeId } });
+      }
+    }
 
     const earnedXp = score * XP_PER_CORRECT;
     const earnedCoins = score * COINS_PER_CORRECT;
-    await this.prisma.user.update({
-      where: { id: userId },
-      data: { xp: { increment: earnedXp }, coins: { increment: earnedCoins } },
+    await this.ledger.grant({
+      userId,
+      xp: earnedXp,
+      coins: earnedCoins,
+      reason: 'challenge',
+      key: `challenge:${challengeId}:${userId}`,
+      refType: 'challenge',
+      refId: challengeId,
     });
     // Same subject-accuracy tracking a regular quiz submission does -
     // feeds Challenge matchmaking regardless of which mode the student
     // actually answered questions through.
     await this.prisma.subjectStat.upsert({
       where: { userId_subjectId: { userId, subjectId: challenge.subjectId } },
-      create: { userId, subjectId: challenge.subjectId, questionsAnswered: answers.length, correctAnswers: score },
+      create: { userId, subjectId: challenge.subjectId, questionsAnswered: picked.size, correctAnswers: score },
       update: {
-        questionsAnswered: { increment: answers.length },
+        questionsAnswered: { increment: picked.size },
         correctAnswers: { increment: score },
         lastActiveAt: new Date(),
       },
     });
 
-    if (bothDone) {
+    if (finishedHere) {
       await this._finishChallenge(updated);
     }
 
@@ -546,9 +580,14 @@ export class ChallengesService {
       cScore === oScore ? null : cScore > oScore ? challenge.challengerId : challenge.opponentId;
 
     if (winnerId) {
-      await this.prisma.user.update({
-        where: { id: winnerId },
-        data: { xp: { increment: WIN_BONUS_XP }, coins: { increment: WIN_BONUS_COINS } },
+      await this.ledger.grant({
+        userId: winnerId,
+        xp: WIN_BONUS_XP,
+        coins: WIN_BONUS_COINS,
+        reason: 'challenge_win',
+        key: `challenge_win:${challenge.id}`,
+        refType: 'challenge',
+        refId: challenge.id,
       });
     }
 

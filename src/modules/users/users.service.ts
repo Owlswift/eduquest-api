@@ -3,6 +3,8 @@ import * as argon2 from 'argon2';
 import { PrismaService } from '../../database/prisma.service';
 import { ActivityService } from '../activity/activity.service';
 import { NotificationsService } from '../notifications/notifications.service';
+import { LedgerService } from '../ledger/ledger.service';
+import { QuizService } from '../quiz/quiz.service';
 import { UpdateProfileDto } from './dto/update-profile.dto';
 
 @Injectable()
@@ -11,6 +13,8 @@ export class UsersService {
     private prisma: PrismaService,
     private activity: ActivityService,
     private notifications: NotificationsService,
+    private ledger: LedgerService,
+    private quiz: QuizService,
   ) {}
 
   // ─── Get profile ────────────────────────────────────────────────────────────
@@ -132,72 +136,112 @@ export class UsersService {
     return { message: 'Account deleted' };
   }
 
-  // ─── Claim welcome bonus (100 coins + 50 XP) ─────────────────────────────────
+  // ─── Claim welcome bonus (100 coins + 50 XP, once per account) ───────────────
 
   async claimWelcomeBonus(userId: string) {
     const BONUS_COINS = 100;
     const BONUS_XP = 50;
 
-    const user = await this.prisma.user.update({
-      where: { id: userId },
-      data: {
-        coins: { increment: BONUS_COINS },
-        xp: { increment: BONUS_XP },
-        streak: 1, // Start streak on day 1
-      },
-      select: {
-        id: true,
-        coins: true,
-        xp: true,
-        streak: true,
-      },
+    // The flag flip is the gate: only one concurrent/repeat request can match
+    // `welcomeBonusClaimedAt: null`. The ledger key is a second safety net.
+    const gate = await this.prisma.user.updateMany({
+      where: { id: userId, welcomeBonusClaimedAt: null },
+      data: { welcomeBonusClaimedAt: new Date(), streak: 1 /* day 1 */ },
     });
+    const alreadyClaimed = gate.count === 0;
 
-    await this.activity.recordXp(userId, BONUS_XP);
-    await this.notifications.notify(
-      userId,
-      'welcome_bonus',
-      '🎉 Welcome bonus claimed!',
-      `You earned ${BONUS_COINS} coins and ${BONUS_XP} XP. Let's get started!`,
-    );
+    if (!alreadyClaimed) {
+      await this.ledger.grant({
+        userId,
+        xp: BONUS_XP,
+        coins: BONUS_COINS,
+        reason: 'welcome_bonus',
+        key: `welcome_bonus:${userId}`,
+      });
+      await this.activity.recordXp(userId, BONUS_XP);
+      await this.notifications.notify(
+        userId,
+        'welcome_bonus',
+        '🎉 Welcome bonus claimed!',
+        `You earned ${BONUS_COINS} coins and ${BONUS_XP} XP. Let's get started!`,
+      );
+    }
+
+    const user = await this.prisma.user.findUniqueOrThrow({
+      where: { id: userId },
+      select: { id: true, coins: true, xp: true, streak: true },
+    });
 
     return {
       ...user,
-      bonusCoins: BONUS_COINS,
-      bonusXp: BONUS_XP,
+      alreadyClaimed,
+      bonusCoins: alreadyClaimed ? 0 : BONUS_COINS,
+      bonusXp: alreadyClaimed ? 0 : BONUS_XP,
     };
   }
 
   // ─── Complete starter challenge (coins based on correct answers) ──────────────
 
+  /** Most correct answers the one-off starter challenge can pay for. */
+  private static readonly STARTER_MAX_REWARDED = 10;
+
   async completeStarterChallenge(
     userId: string,
+    sessionId: string,
     answers: { questionId: string; selectedOptionId: string }[],
   ) {
     const COINS_PER_CORRECT = 10;
     const XP_PER_CORRECT = 10;
 
-    // Grade server-side, same as the main quiz - don't trust a
-    // client-reported correctAnswers count.
-    const questions = await this.prisma.question.findMany({
-      where: { id: { in: answers.map((a) => a.questionId) } },
-      select: { id: true, correctAnswerId: true },
+    const existing = await this.prisma.user.findUniqueOrThrow({
+      where: { id: userId },
+      select: { starterChallengeCompletedAt: true },
     });
-    const correctById = new Map(questions.map((q) => [q.id, q.correctAnswerId]));
+    if (existing.starterChallengeCompletedAt) {
+      throw new ConflictException('Starter challenge already completed');
+    }
 
-    const questionsAnswered = answers.length;
-    const correctAnswers = answers.filter(
-      (a) => correctById.get(a.questionId) === a.selectedOptionId,
-    ).length;
+    // Grade server-side against the questions the server issued for this
+    // session, same as the main quiz - never a client-reported count.
+    const graded = await this.quiz.gradeAndCloseSession(userId, sessionId, answers);
 
-    const earnedCoins = correctAnswers * COINS_PER_CORRECT;
-    const earnedXp = correctAnswers * XP_PER_CORRECT;
+    // The completion flag is the one-time gate for the badge and rewards.
+    const gate = await this.prisma.user.updateMany({
+      where: { id: userId, starterChallengeCompletedAt: null },
+      data: { starterChallengeCompletedAt: new Date() },
+    });
+    if (gate.count === 0) {
+      throw new ConflictException('Starter challenge already completed');
+    }
+
+    const questionsAnswered = graded.questionIds.length;
+    const correctAnswers = graded.correctIds.length;
+    const rewarded = graded.correctIds.slice(0, UsersService.STARTER_MAX_REWARDED);
+
+    let earnedXp = 0;
+    let earnedCoins = 0;
+    await this.prisma.$transaction(async (tx) => {
+      for (const questionId of rewarded) {
+        const res = await this.ledger.grant(
+          {
+            userId,
+            xp: XP_PER_CORRECT,
+            coins: COINS_PER_CORRECT,
+            reason: 'starter_challenge',
+            key: `starter:${userId}:${questionId}`,
+            refType: 'question',
+            refId: questionId,
+          },
+          tx,
+        );
+        earnedXp += res.xp;
+        earnedCoins += res.coins;
+      }
+    });
 
     const user = await this.prisma.user.update({
       where: { id: userId },
       data: {
-        coins: { increment: earnedCoins },
-        xp: { increment: earnedXp },
         questionsAnswered: { increment: questionsAnswered },
         badges: { increment: 1 }, // First Steps badge
       },

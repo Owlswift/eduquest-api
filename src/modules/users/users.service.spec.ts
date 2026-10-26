@@ -1,4 +1,4 @@
-import { BadRequestException, UnauthorizedException } from '@nestjs/common';
+import { BadRequestException, ConflictException, UnauthorizedException } from '@nestjs/common';
 import * as argon2 from 'argon2';
 import { UsersService } from './users.service';
 
@@ -14,7 +14,7 @@ describe('UsersService.getLeaderboard', () => {
       user: { findMany: jest.fn(), findUnique: jest.fn(), count: jest.fn() },
       dailyActivity: { groupBy: jest.fn() },
     };
-    service = new UsersService(prisma as any, {} as any, {} as any);
+    service = new UsersService(prisma as any, {} as any, {} as any, {} as any, {} as any);
   });
 
 
@@ -95,7 +95,7 @@ describe('UsersService.getSubjectProgress', () => {
       studentMastery: { groupBy: jest.fn() },
       subject: { findMany: jest.fn() },
     };
-    service = new UsersService(prisma as any, {} as any, {} as any);
+    service = new UsersService(prisma as any, {} as any, {} as any, {} as any, {} as any);
   });
 
   it('averages mastery per subject, sorted highest first', async () => {
@@ -128,42 +128,73 @@ describe('UsersService.getSubjectProgress', () => {
 
 describe('UsersService.completeStarterChallenge', () => {
   let prisma: {
-    question: { findMany: jest.Mock };
-    user: { update: jest.Mock; count: jest.Mock };
+    user: {
+      findUniqueOrThrow: jest.Mock;
+      updateMany: jest.Mock;
+      update: jest.Mock;
+      count: jest.Mock;
+    };
+    $transaction: jest.Mock;
   };
   let activity: { recordQuestions: jest.Mock; recordXp: jest.Mock };
   let notifications: { notify: jest.Mock };
+  let ledger: { grant: jest.Mock };
+  let quiz: { gradeAndCloseSession: jest.Mock };
   let service: UsersService;
+
+  const graded = (correctIds: string[], total = 2) => ({
+    sessionId: 's1',
+    subjectId: 'math',
+    questionIds: Array.from({ length: total }, (_, i) => `q${i + 1}`),
+    correctIds,
+  });
 
   beforeEach(() => {
     prisma = {
-      question: { findMany: jest.fn() },
-      user: { update: jest.fn(), count: jest.fn() },
+      user: {
+        findUniqueOrThrow: jest.fn().mockResolvedValue({ starterChallengeCompletedAt: null }),
+        updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+        update: jest.fn(),
+        count: jest.fn(),
+      },
+      $transaction: jest.fn(),
     };
-    activity = { recordQuestions: jest.fn(), recordXp: jest.fn() };
-    notifications = { notify: jest.fn() };
-    service = new UsersService(prisma as any, activity as any, notifications as any);
-  });
-
-  it('grades server-side from real correctAnswerId values', async () => {
-    prisma.question.findMany.mockResolvedValue([
-      { id: 'q1', correctAnswerId: 'a' },
-      { id: 'q2', correctAnswerId: 'b' },
-    ]);
+    prisma.$transaction.mockImplementation((cb: any) => cb({}));
     prisma.user.update.mockResolvedValue({
       id: 'u1',
-      coins: 20,
-      xp: 20,
+      coins: 10,
+      xp: 100,
       questionsAnswered: 2,
       badges: 1,
+      state: null,
     });
-    prisma.user.count.mockResolvedValue(10);
+    prisma.user.count.mockResolvedValue(2);
+    activity = { recordQuestions: jest.fn(), recordXp: jest.fn() };
+    notifications = { notify: jest.fn() };
+    ledger = { grant: jest.fn().mockResolvedValue({ applied: true, xp: 10, coins: 10 }) };
+    quiz = { gradeAndCloseSession: jest.fn().mockResolvedValue(graded(['q1'])) };
+    service = new UsersService(
+      prisma as any,
+      activity as any,
+      notifications as any,
+      ledger as any,
+      quiz as any,
+    );
+  });
 
-    const result = await service.completeStarterChallenge('u1', [
-      { questionId: 'q1', selectedOptionId: 'a' }, // correct
-      { questionId: 'q2', selectedOptionId: 'x' }, // wrong
-    ]);
+  it('grades the issued session and pays one ledger award per correct answer', async () => {
+    const answers = [
+      { questionId: 'q1', selectedOptionId: 'a' },
+      { questionId: 'q2', selectedOptionId: 'x' },
+    ];
+    const result = await service.completeStarterChallenge('u1', 's1', answers);
 
+    expect(quiz.gradeAndCloseSession).toHaveBeenCalledWith('u1', 's1', answers);
+    expect(ledger.grant).toHaveBeenCalledTimes(1);
+    expect(ledger.grant).toHaveBeenCalledWith(
+      expect.objectContaining({ userId: 'u1', xp: 10, coins: 10, key: 'starter:u1:q1' }),
+      expect.anything(),
+    );
     expect(result.correctAnswers).toBe(1);
     expect(result.earnedCoins).toBe(10);
     expect(result.earnedXp).toBe(10);
@@ -177,51 +208,123 @@ describe('UsersService.completeStarterChallenge', () => {
     );
   });
 
+  it('can only be completed once per account', async () => {
+    prisma.user.findUniqueOrThrow.mockResolvedValue({ starterChallengeCompletedAt: new Date() });
+
+    await expect(service.completeStarterChallenge('u1', 's1', [])).rejects.toBeInstanceOf(
+      ConflictException,
+    );
+    expect(quiz.gradeAndCloseSession).not.toHaveBeenCalled();
+    expect(ledger.grant).not.toHaveBeenCalled();
+  });
+
+  it('pays nothing when a concurrent request already completed it', async () => {
+    prisma.user.updateMany.mockResolvedValue({ count: 0 });
+
+    await expect(service.completeStarterChallenge('u1', 's1', [])).rejects.toBeInstanceOf(
+      ConflictException,
+    );
+    expect(ledger.grant).not.toHaveBeenCalled();
+    expect(prisma.user.update).not.toHaveBeenCalled();
+  });
+
+  it('caps how many correct answers the starter challenge pays for', async () => {
+    const ids = Array.from({ length: 30 }, (_, i) => `q${i + 1}`);
+    quiz.gradeAndCloseSession.mockResolvedValue({
+      sessionId: 's1',
+      subjectId: 'math',
+      questionIds: ids,
+      correctIds: ids,
+    });
+
+    await service.completeStarterChallenge('u1', 's1', []);
+
+    expect(ledger.grant).toHaveBeenCalledTimes(10);
+  });
+
   it('computes real ranks by XP instead of the old Math.random() placeholders', async () => {
-    prisma.question.findMany.mockResolvedValue([{ id: 'q1', correctAnswerId: 'a' }]);
     prisma.user.update.mockResolvedValue({
       id: 'u1',
       coins: 10,
       xp: 100,
-      questionsAnswered: 1,
+      questionsAnswered: 2,
       badges: 1,
       state: 'Lagos',
     });
     // First count() call = national (STUDENT, xp > 100); second = same-state.
+    prisma.user.count.mockReset();
     prisma.user.count.mockResolvedValueOnce(4).mockResolvedValueOnce(1);
 
-    const result = await service.completeStarterChallenge('u1', [
-      { questionId: 'q1', selectedOptionId: 'a' },
-    ]);
+    const result = await service.completeStarterChallenge('u1', 's1', []);
 
     expect(result.nationalRank).toBe(5);
     expect(result.stateRank).toBe(2);
-    expect(prisma.user.count).toHaveBeenNthCalledWith(1, {
-      where: { role: 'STUDENT', xp: { gt: 100 } },
-    });
     expect(prisma.user.count).toHaveBeenNthCalledWith(2, {
       where: { role: 'STUDENT', state: 'Lagos', xp: { gt: 100 } },
     });
   });
 
   it('leaves stateRank null (not fabricated) when the student has no state set', async () => {
-    prisma.question.findMany.mockResolvedValue([{ id: 'q1', correctAnswerId: 'a' }]);
-    prisma.user.update.mockResolvedValue({
-      id: 'u1',
-      coins: 10,
-      xp: 50,
-      questionsAnswered: 1,
-      badges: 1,
-      state: null,
-    });
-    prisma.user.count.mockResolvedValue(2);
-
-    const result = await service.completeStarterChallenge('u1', [
-      { questionId: 'q1', selectedOptionId: 'a' },
-    ]);
+    const result = await service.completeStarterChallenge('u1', 's1', []);
 
     expect(result.stateRank).toBeNull();
     expect(prisma.user.count).toHaveBeenCalledTimes(1); // no state query at all
+  });
+});
+
+describe('UsersService.claimWelcomeBonus', () => {
+  let prisma: { user: { updateMany: jest.Mock; findUniqueOrThrow: jest.Mock } };
+  let activity: { recordXp: jest.Mock };
+  let notifications: { notify: jest.Mock };
+  let ledger: { grant: jest.Mock };
+  let service: UsersService;
+
+  beforeEach(() => {
+    prisma = {
+      user: {
+        updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+        findUniqueOrThrow: jest.fn().mockResolvedValue({ id: 'u1', coins: 100, xp: 50, streak: 1 }),
+      },
+    };
+    activity = { recordXp: jest.fn() };
+    notifications = { notify: jest.fn() };
+    ledger = { grant: jest.fn() };
+    service = new UsersService(
+      prisma as any,
+      activity as any,
+      notifications as any,
+      ledger as any,
+      {} as any,
+    );
+  });
+
+  it('pays 100 coins + 50 XP through the ledger the first time', async () => {
+    const result = await service.claimWelcomeBonus('u1');
+
+    expect(prisma.user.updateMany).toHaveBeenCalledWith({
+      where: { id: 'u1', welcomeBonusClaimedAt: null },
+      data: { welcomeBonusClaimedAt: expect.any(Date), streak: 1 },
+    });
+    expect(ledger.grant).toHaveBeenCalledWith({
+      userId: 'u1',
+      xp: 50,
+      coins: 100,
+      reason: 'welcome_bonus',
+      key: 'welcome_bonus:u1',
+    });
+    expect(result).toMatchObject({ alreadyClaimed: false, bonusCoins: 100, bonusXp: 50 });
+    expect(notifications.notify).toHaveBeenCalledTimes(1);
+  });
+
+  it('pays nothing on a repeat claim', async () => {
+    prisma.user.updateMany.mockResolvedValue({ count: 0 });
+
+    const result = await service.claimWelcomeBonus('u1');
+
+    expect(ledger.grant).not.toHaveBeenCalled();
+    expect(activity.recordXp).not.toHaveBeenCalled();
+    expect(notifications.notify).not.toHaveBeenCalled();
+    expect(result).toMatchObject({ alreadyClaimed: true, bonusCoins: 0, bonusXp: 0 });
   });
 });
 
@@ -231,7 +334,7 @@ describe('UsersService.changePassword', () => {
 
   beforeEach(() => {
     prisma = { user: { findUnique: jest.fn(), update: jest.fn() } };
-    service = new UsersService(prisma as any, {} as any, {} as any);
+    service = new UsersService(prisma as any, {} as any, {} as any, {} as any, {} as any);
   });
 
   it('changes the password when the current one is correct', async () => {
@@ -269,7 +372,7 @@ describe('UsersService.changePassword', () => {
 describe('UsersService.deleteAccount', () => {
   it('deletes the user row (cascades handle the rest)', async () => {
     const prisma = { user: { delete: jest.fn().mockResolvedValue({}) } };
-    const service = new UsersService(prisma as any, {} as any, {} as any);
+    const service = new UsersService(prisma as any, {} as any, {} as any, {} as any, {} as any);
 
     const result = await service.deleteAccount('u1');
 
@@ -290,7 +393,7 @@ describe('UsersService.searchStudents', () => {
       user: { findUnique: jest.fn(), findMany: jest.fn() },
       challenge: { findMany: jest.fn() },
     };
-    service = new UsersService(prisma as any, {} as any, {} as any);
+    service = new UsersService(prisma as any, {} as any, {} as any, {} as any, {} as any);
   });
 
   it('returns nothing for a query shorter than 2 characters', async () => {

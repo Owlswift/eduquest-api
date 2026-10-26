@@ -1,16 +1,34 @@
 import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module';
 import { Logger, ValidationPipe } from '@nestjs/common';
+import helmet from 'helmet';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import { LoggingInterceptor } from './common/interceptors/logging.interceptor';
 
 async function bootstrap() {
+  // Fail fast: without this every token would be signed/verified with an
+  // undefined secret.
+  if (!process.env.JWT_SECRET) {
+    throw new Error('JWT_SECRET must be set');
+  }
+
   const app = await NestFactory.create(AppModule);
 
-  // The admin dashboard (a separate web app) calls this API cross-origin -
-  // wide open since this is an internal tool on a local/private network,
-  // not a public-facing service.
-  app.enableCors();
+  // JSON API: the CSP header adds nothing here and would break the
+  // Swagger UI, so only that one is off.
+  app.use(helmet({ contentSecurityPolicy: false }));
+
+  // Browser callers (the admin dashboard) must be listed in CORS_ORIGINS
+  // (comma-separated). Native mobile clients don't use CORS. With the
+  // variable unset, development stays open and production allows no
+  // cross-origin browser access.
+  const corsOrigins = (process.env.CORS_ORIGINS ?? '')
+    .split(',')
+    .map((o) => o.trim())
+    .filter(Boolean);
+  app.enableCors({
+    origin: corsOrigins.length > 0 ? corsOrigins : process.env.NODE_ENV !== 'production',
+  });
 
   // Enable global validation for DTOs
   app.useGlobalPipes(

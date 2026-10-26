@@ -10,12 +10,15 @@ describe('ChallengesService', () => {
       findMany: jest.Mock;
       findFirst: jest.Mock;
       findUnique: jest.Mock;
+      findUniqueOrThrow: jest.Mock;
       update: jest.Mock;
+      updateMany: jest.Mock;
     };
     question: { findMany: jest.Mock };
     subjectStat: { findUnique: jest.Mock; findMany: jest.Mock; upsert: jest.Mock };
   };
   let notifications: { notify: jest.Mock };
+  let ledger: { grant: jest.Mock };
   let service: ChallengesService;
 
   beforeEach(() => {
@@ -27,14 +30,17 @@ describe('ChallengesService', () => {
         findMany: jest.fn(),
         findFirst: jest.fn(),
         findUnique: jest.fn(),
+        findUniqueOrThrow: jest.fn(),
         update: jest.fn(),
+        updateMany: jest.fn(),
       },
       question: { findMany: jest.fn() },
       subjectStat: { findUnique: jest.fn(), findMany: jest.fn(), upsert: jest.fn() },
     };
     prisma.subjectStat.upsert.mockResolvedValue({});
     notifications = { notify: jest.fn() };
-    service = new ChallengesService(prisma as any, notifications as any);
+    ledger = { grant: jest.fn().mockResolvedValue({ applied: true, xp: 0, coins: 0 }) };
+    service = new ChallengesService(prisma as any, notifications as any, ledger as any);
   });
 
   describe('create', () => {
@@ -289,14 +295,20 @@ describe('ChallengesService', () => {
       opponentScore: null,
     };
 
+    const answerKey = [
+      { id: 'q1', correctAnswerId: 'q1_b' },
+      { id: 'q2', correctAnswerId: 'q2_a' },
+    ];
+
     it('grades server-side from the real answer key, not a client-reported score', async () => {
       prisma.challenge.findUnique.mockResolvedValue(activeChallenge);
-      prisma.question.findMany.mockResolvedValue([
-        { id: 'q1', correctAnswerId: 'q1_b' },
-        { id: 'q2', correctAnswerId: 'q2_a' },
-      ]);
-      prisma.challenge.update.mockResolvedValue({ ...activeChallenge, challengerScore: 1 });
-      prisma.user.update.mockResolvedValue({});
+      prisma.question.findMany.mockResolvedValue(answerKey);
+      prisma.challenge.updateMany.mockResolvedValue({ count: 1 });
+      prisma.challenge.findUniqueOrThrow.mockResolvedValue({
+        ...activeChallenge,
+        challengerCompletedAt: new Date(),
+        challengerScore: 1,
+      });
 
       const result = await service.submitAnswers('me', 'c1', [
         { questionId: 'q1', selectedOptionId: 'q1_b' }, // correct
@@ -305,12 +317,33 @@ describe('ChallengesService', () => {
 
       expect(result.score).toBe(1);
       expect(result.waitingOnOpponent).toBe(true);
-      expect(prisma.user.update).toHaveBeenCalledWith({
-        where: { id: 'me' },
-        data: { xp: { increment: 10 }, coins: { increment: 10 } },
-      });
-      // First submitter doesn't complete the challenge on their own.
-      expect(prisma.challenge.update.mock.calls[0][0].data.status).toBeUndefined();
+      expect(ledger.grant).toHaveBeenCalledWith(
+        expect.objectContaining({
+          userId: 'me',
+          xp: 10,
+          coins: 10,
+          key: 'challenge:c1:me',
+        }),
+      );
+      // Only the submission claim ran: the first submitter doesn't complete it.
+      expect(prisma.challenge.updateMany).toHaveBeenCalledTimes(1);
+    });
+
+    it('cannot inflate the score by repeating a correct answer', async () => {
+      prisma.challenge.findUnique.mockResolvedValue(activeChallenge);
+      prisma.question.findMany.mockResolvedValue(answerKey);
+      prisma.challenge.updateMany.mockResolvedValue({ count: 1 });
+      prisma.challenge.findUniqueOrThrow.mockResolvedValue(activeChallenge);
+
+      const result = await service.submitAnswers('me', 'c1', [
+        { questionId: 'q1', selectedOptionId: 'q1_b' },
+        { questionId: 'q1', selectedOptionId: 'q1_b' },
+        { questionId: 'q1', selectedOptionId: 'q1_b' },
+        { questionId: 'not-in-challenge', selectedOptionId: 'x' },
+      ]);
+
+      expect(result.score).toBe(1);
+      expect(result.earnedXp).toBe(10);
     });
 
     it('completes the challenge and awards a win bonus once both sides have answered', async () => {
@@ -319,18 +352,16 @@ describe('ChallengesService', () => {
         opponentCompletedAt: new Date('2026-01-01'),
         opponentScore: 1,
       });
-      prisma.question.findMany.mockResolvedValue([
-        { id: 'q1', correctAnswerId: 'q1_b' },
-        { id: 'q2', correctAnswerId: 'q2_a' },
-      ]);
-      prisma.challenge.update.mockResolvedValue({
-        id: 'c1',
-        challengerId: 'me',
-        opponentId: 'opp',
+      prisma.question.findMany.mockResolvedValue(answerKey);
+      prisma.challenge.updateMany.mockResolvedValue({ count: 1 });
+      const both = {
+        ...activeChallenge,
+        challengerCompletedAt: new Date(),
         challengerScore: 2,
+        opponentCompletedAt: new Date('2026-01-01'),
         opponentScore: 1,
-      });
-      prisma.user.update.mockResolvedValue({});
+      };
+      prisma.challenge.findUniqueOrThrow.mockResolvedValue(both);
       prisma.user.findUnique.mockResolvedValue({ fullName: 'Someone' });
 
       const result = await service.submitAnswers('me', 'c1', [
@@ -339,17 +370,56 @@ describe('ChallengesService', () => {
       ]);
 
       expect(result.waitingOnOpponent).toBe(false);
-      expect(prisma.challenge.update.mock.calls[0][0].data.status).toBe('COMPLETED');
-      // Base reward (2 correct x 10) plus the winner's bonus, in two separate calls.
-      expect(prisma.user.update).toHaveBeenCalledWith({
-        where: { id: 'me' },
-        data: { xp: { increment: 20 }, coins: { increment: 20 } },
+      // Claim, then the ACTIVE -> COMPLETED flip.
+      expect(prisma.challenge.updateMany).toHaveBeenCalledTimes(2);
+      expect(prisma.challenge.updateMany.mock.calls[1][0]).toEqual({
+        where: { id: 'c1', status: 'ACTIVE' },
+        data: { status: 'COMPLETED', completedAt: expect.any(Date) },
       });
-      expect(prisma.user.update).toHaveBeenCalledWith({
-        where: { id: 'me' },
-        data: { xp: { increment: 50 }, coins: { increment: 20 } },
-      });
+      // Base reward (2 correct x 10), then the winner's bonus - separate ledger keys.
+      expect(ledger.grant).toHaveBeenCalledWith(
+        expect.objectContaining({ userId: 'me', xp: 20, coins: 20, key: 'challenge:c1:me' }),
+      );
+      expect(ledger.grant).toHaveBeenCalledWith(
+        expect.objectContaining({ userId: 'me', xp: 50, coins: 20, key: 'challenge_win:c1' }),
+      );
       expect(notifications.notify).toHaveBeenCalledTimes(2);
+    });
+
+    it('finishes (and pays the win bonus) only once when both submit at the same time', async () => {
+      prisma.challenge.findUnique.mockResolvedValue(activeChallenge);
+      prisma.question.findMany.mockResolvedValue(answerKey);
+      // The submission claim wins, but the other player's request already
+      // flipped the status: the COMPLETED update matches nothing here.
+      prisma.challenge.updateMany
+        .mockResolvedValueOnce({ count: 1 })
+        .mockResolvedValueOnce({ count: 0 });
+      prisma.challenge.findUniqueOrThrow.mockResolvedValue({
+        ...activeChallenge,
+        challengerCompletedAt: new Date(),
+        opponentCompletedAt: new Date(),
+        challengerScore: 2,
+        opponentScore: 1,
+      });
+
+      await service.submitAnswers('me', 'c1', [
+        { questionId: 'q1', selectedOptionId: 'q1_b' },
+        { questionId: 'q2', selectedOptionId: 'q2_a' },
+      ]);
+
+      const winGrants = ledger.grant.mock.calls.filter((c) => c[0].reason === 'challenge_win');
+      expect(winGrants).toHaveLength(0);
+    });
+
+    it('rejects a replayed submission that loses the claim race', async () => {
+      prisma.challenge.findUnique.mockResolvedValue(activeChallenge);
+      prisma.question.findMany.mockResolvedValue(answerKey);
+      prisma.challenge.updateMany.mockResolvedValue({ count: 0 });
+
+      await expect(
+        service.submitAnswers('me', 'c1', [{ questionId: 'q1', selectedOptionId: 'q1_b' }]),
+      ).rejects.toBeInstanceOf(BadRequestException);
+      expect(ledger.grant).not.toHaveBeenCalled();
     });
 
     it('rejects submitting twice', async () => {

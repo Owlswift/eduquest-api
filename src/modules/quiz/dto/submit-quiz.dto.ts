@@ -1,5 +1,5 @@
 import { Type } from 'class-transformer';
-import { ArrayMinSize, IsArray, IsInt, IsString, Min, ValidateNested } from 'class-validator';
+import { ArrayMinSize, IsArray, IsInt, IsOptional, IsString, Min, ValidateNested } from 'class-validator';
 
 export class QuizAnswerDto {
   @IsString()
@@ -12,11 +12,19 @@ export class QuizAnswerDto {
 }
 
 export class SubmitQuizDto {
+  /** The session issued by GET /quiz/questions. The questions graded and
+   *  rewarded are the ones the server issued for it, not anything the
+   *  client sends. */
   @IsString()
-  subjectId!: string;
+  sessionId!: string;
+
+  /** Ignored - the subject comes from the session. Still accepted so
+   *  older clients that send it don't fail validation. */
+  @IsOptional()
+  @IsString()
+  subjectId?: string;
 
   @IsArray()
-  @ArrayMinSize(1)
   @ValidateNested({ each: true })
   @Type(() => QuizAnswerDto)
   answers!: QuizAnswerDto[];

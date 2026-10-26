@@ -3,9 +3,10 @@ import { JwtModule } from '@nestjs/jwt';
 import { UsersController } from './users.controller';
 import { UsersService } from './users.service';
 import { PrismaService } from '../../database/prisma.service';
+import { QuizModule } from '../quiz/quiz.module';
 
 @Module({
-  imports: [JwtModule.register({})],
+  imports: [JwtModule.register({}), QuizModule],
   controllers: [UsersController],
   providers: [UsersService, PrismaService],
   exports: [UsersService],

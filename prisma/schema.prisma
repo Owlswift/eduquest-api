@@ -57,6 +57,17 @@ enum CurriculumImportStatus {
   SAVED
 }
 
+/// What a [LedgerEntry] amount is denominated in.
+enum LedgerCurrency {
+  XP
+  COIN
+}
+
+enum QuizSessionStatus {
+  OPEN
+  SUBMITTED
+}
+
 enum LessonState {
   INTRODUCTION
   ASSESS_PRIOR_KNOWLEDGE
@@ -104,9 +115,17 @@ model User {
   accuracy     Float      @default(0.0)
   timeSpent    Int        @default(0)
 
+  /// Set once, atomically, when the welcome bonus is paid out - makes
+  /// POST /users/claim-bonus a one-time award.
+  welcomeBonusClaimedAt       DateTime?
+  /// Set once when the starter challenge is graded and paid out.
+  starterChallengeCompletedAt DateTime?
+
   createdAt    DateTime   @default(now())
   updatedAt    DateTime   @updatedAt
 
+  quizSessions         QuizSession[]
+  ledgerEntries        LedgerEntry[]
   tutorSessions        TutorSession[]
   studentMastery       StudentMastery[]
   dailyActivities      DailyActivity[]
@@ -119,6 +138,52 @@ model User {
   challengesSent       Challenge[]              @relation("ChallengesSent")
   challengesReceived   Challenge[]              @relation("ChallengesReceived")
   subjectStats         SubjectStat[]
+}
+
+/// Append-only record of every XP / coin change. `User.xp` and
+/// `User.coins` are running totals of these rows (opening balances for
+/// accounts that predate the ledger are stored as `opening_balance`
+/// entries). `idempotencyKey` is unique, so a retried or replayed award
+/// with the same key can never be applied twice.
+model LedgerEntry {
+  id             String         @id @default(cuid())
+  userId         String
+  currency       LedgerCurrency
+  /// Positive = credit, negative = debit.
+  amount         Int
+  reason         String
+  refType        String?
+  refId          String?
+  idempotencyKey String         @unique
+
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, currency, createdAt])
+  @@index([userId, reason, createdAt])
+}
+
+/// A server-issued set of quiz questions. Rewards are only ever paid
+/// against a session: the client can't choose which questions count, and
+/// a session can be submitted exactly once. `answers` holds
+/// { [questionId]: selectedOptionId } for questions whose answer was
+/// locked in via the per-question check, so a revealed answer can't be
+/// changed afterwards.
+model QuizSession {
+  id          String            @id @default(cuid())
+  userId      String
+  subjectId   String
+  questionIds String[]
+  answers     Json              @default("{}")
+  status      QuizSessionStatus @default(OPEN)
+
+  createdAt   DateTime  @default(now())
+  submittedAt DateTime?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, status])
 }
 
 /// Auto-awarded once a student's average StudentMastery score in a

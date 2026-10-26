@@ -1,6 +1,7 @@
 import { Injectable, BadRequestException, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../../database/prisma.service';
 import { NotificationsService } from '../notifications/notifications.service';
+import { LedgerService } from '../ledger/ledger.service';
 import { REWARDS_CATALOG } from './rewards.catalog';
 
 @Injectable()
@@ -8,6 +9,7 @@ export class RewardsService {
   constructor(
     private prisma: PrismaService,
     private notifications: NotificationsService,
+    private ledger: LedgerService,
   ) {}
 
   // ─── GET /rewards ─────────────────────────────────────────────────────────
@@ -34,30 +36,30 @@ export class RewardsService {
     const reward = REWARDS_CATALOG.find((r) => r.id === rewardId);
     if (!reward) throw new NotFoundException('Unknown reward');
 
-    const user = await this.prisma.user.findUnique({
-      where: { id: userId },
-      select: { coins: true },
-    });
-    if (!user) throw new NotFoundException('User not found');
-    if (user.coins < reward.coinCost) {
-      throw new BadRequestException('Not enough coins for this reward');
-    }
-
-    const [updatedUser] = await this.prisma.$transaction([
-      this.prisma.user.update({
-        where: { id: userId },
-        data: { coins: { decrement: reward.coinCost } },
-        select: { coins: true },
-      }),
-      this.prisma.rewardRedemption.create({
+    // Balance check, debit, ledger row and redemption record commit
+    // together. The debit is one conditional UPDATE (`coins >= cost`), so
+    // concurrent redemptions can't drive the balance negative.
+    const { coins } = await this.prisma.$transaction(async (tx) => {
+      const redemption = await tx.rewardRedemption.create({
         data: {
           userId,
           rewardId: reward.id,
           title: reward.title,
           coinCost: reward.coinCost,
         },
-      }),
-    ]);
+      });
+      return this.ledger.spendCoins(
+        {
+          userId,
+          coins: reward.coinCost,
+          reason: 'redemption',
+          key: `redemption:${redemption.id}`,
+          refType: 'redemption',
+          refId: redemption.id,
+        },
+        tx,
+      );
+    });
 
     await this.notifications.notify(
       userId,
@@ -67,7 +69,7 @@ export class RewardsService {
       { rewardId: reward.id },
     );
 
-    return { redeemed: true, coins: updatedUser.coins };
+    return { redeemed: true, coins };
   }
 
   // ─── GET /rewards/history ──────────────────────────────────────────────────
@@ -122,10 +124,13 @@ export class RewardsService {
       throw new BadRequestException(`Redemption is already ${redemption.status.toLowerCase()}`);
     }
 
-    await this.prisma.rewardRedemption.update({
-      where: { id: redemptionId },
+    // Conditional on PENDING so two admins (or a double-click) can't both
+    // act on the same redemption.
+    const done = await this.prisma.rewardRedemption.updateMany({
+      where: { id: redemptionId, status: 'PENDING' },
       data: { status: 'FULFILLED', fulfilledAt: new Date() },
     });
+    if (done.count === 0) throw new BadRequestException('Redemption is no longer pending');
 
     await this.notifications.notify(
       redemption.userId,
@@ -150,16 +155,27 @@ export class RewardsService {
       throw new BadRequestException(`Redemption is already ${redemption.status.toLowerCase()}`);
     }
 
-    await this.prisma.$transaction([
-      this.prisma.rewardRedemption.update({
-        where: { id: redemptionId },
+    // The status flip and the refund commit together, and the flip only
+    // matches a still-PENDING row - so the refund is paid exactly once (the
+    // ledger key is a second guard).
+    await this.prisma.$transaction(async (tx) => {
+      const flipped = await tx.rewardRedemption.updateMany({
+        where: { id: redemptionId, status: 'PENDING' },
         data: { status: 'REJECTED', fulfilledAt: new Date() },
-      }),
-      this.prisma.user.update({
-        where: { id: redemption.userId },
-        data: { coins: { increment: redemption.coinCost } },
-      }),
-    ]);
+      });
+      if (flipped.count === 0) throw new BadRequestException('Redemption is no longer pending');
+      await this.ledger.grant(
+        {
+          userId: redemption.userId,
+          coins: redemption.coinCost,
+          reason: 'redemption_refund',
+          key: `redemption_refund:${redemptionId}`,
+          refType: 'redemption',
+          refId: redemptionId,
+        },
+        tx,
+      );
+    });
 
     await this.notifications.notify(
       redemption.userId,

@@ -107,14 +107,15 @@ export class UsersController {
     return {
       bonusCoins: result.bonusCoins,
       bonusXp: result.bonusXp,
-      message: 'Bonus claimed successfully',
+      alreadyClaimed: result.alreadyClaimed,
+      message: result.alreadyClaimed ? 'Bonus already claimed' : 'Bonus claimed successfully',
     };
   }
 
   // POST /users/complete-challenge
   @Post('complete-challenge')
   async completeChallenge(@CurrentUser() user: any, @Body() dto: CompleteChallengeDto) {
-    const result = await this.users.completeStarterChallenge(user.sub, dto.answers);
+    const result = await this.users.completeStarterChallenge(user.sub, dto.sessionId, dto.answers);
     return {
       earnedCoins: result.earnedCoins,
       earnedXp: result.earnedXp,

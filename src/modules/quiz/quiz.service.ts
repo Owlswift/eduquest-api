@@ -1,18 +1,50 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import { PrismaService } from '../../database/prisma.service';
 import { ActivityService } from '../activity/activity.service';
-import { ClassLevel } from '@prisma/client';
+import { LedgerService } from '../ledger/ledger.service';
+import { ClassLevel, LedgerCurrency, QuizSessionStatus } from '@prisma/client';
+
+/** XP and coins paid per correct answer. */
+export const QUIZ_XP_PER_CORRECT = 10;
+export const QUIZ_COINS_PER_CORRECT = 10;
+/** Most XP (and coins) the quiz can pay a student per (Lagos) day. A question
+ *  also pays at most once per user per (Lagos) week, so replaying the same
+ *  questions can't be farmed. */
+export const QUIZ_DAILY_REWARD_CAP = 500;
+/** How long a session may stay open before it can no longer be submitted. */
+export const QUIZ_SESSION_TTL_MS = 3 * 60 * 60 * 1000;
+
+const LAGOS_OFFSET_MS = 60 * 60 * 1000; // UTC+1, no DST
+
+export interface GradedSession {
+  sessionId: string;
+  subjectId: string;
+  /** Every question in the session, in issue order. */
+  questionIds: string[];
+  /** Subset of `questionIds` answered correctly. */
+  correctIds: string[];
+}
 
 @Injectable()
 export class QuizService {
   constructor(
     private prisma: PrismaService,
     private activity: ActivityService,
+    private ledger: LedgerService,
   ) {}
 
   // ─── GET /quiz/questions ────────────────────────────────────────────────────
 
+  /** Issues a quiz session and returns its questions. Each question carries
+   *  the `sessionId`; checking and submitting answers only works against a
+   *  session the server issued, so the client can't choose what gets graded
+   *  or rewarded. */
   async getRandomQuestions(
+    userId: string,
     subjectId: string,
     count: number = 10,
     classLevel: ClassLevel = ClassLevel.SS1,
@@ -30,13 +62,21 @@ export class QuizService {
       include: { options: true },
     });
 
-    const shuffled = all.sort(() => Math.random() - 0.5).slice(0, count);
+    const limit = Math.min(Math.max(count, 1), 50);
+    const shuffled = all.sort(() => Math.random() - 0.5).slice(0, limit);
+    if (shuffled.length === 0) return [];
+
+    const session = await this.prisma.quizSession.create({
+      data: { userId, subjectId, questionIds: shuffled.map((q) => q.id) },
+      select: { id: true },
+    });
 
     // correctAnswerId is deliberately withheld - sending it would let a
     // client read the answer straight out of the network response.
     // Grading happens server-side in submitQuizResults instead.
     return shuffled.map((q) => ({
       id: q.id,
+      sessionId: session.id,
       subjectId: q.subjectId,
       classLevel: q.classLevel,
       questionText: q.questionText,
@@ -66,13 +106,37 @@ export class QuizService {
 
   // ─── POST /quiz/questions/:id/check ──────────────────────────────────────────
 
-  /** Reveals whether one already-answered question was right, for a
-   *  student who's just picked an option and wants immediate feedback
-   *  before moving on. Stateless - doesn't affect scoring, so it's safe
-   *  to call per-question without opening the same "read the correct
-   *  answer off the network before answering" hole that including
-   *  correctAnswerId in the question list would. */
-  async checkAnswer(questionId: string, selectedOptionId: string) {
+  /** Locks in the student's answer to one question of their session and
+   *  reveals whether it was right. The first answer wins: it is stored
+   *  atomically, and any later call for the same question just replays the
+   *  stored answer's result - so the correct option can never be learned
+   *  without committing to an answer first, and can't be retried. */
+  async checkAnswer(
+    userId: string,
+    sessionId: string,
+    questionId: string,
+    selectedOptionId: string,
+  ) {
+    const session = await this._openSession(userId, sessionId);
+    if (!session.questionIds.includes(questionId)) {
+      throw new BadRequestException('Question is not part of this quiz session');
+    }
+
+    // Conditional write: only succeeds while this question is unanswered.
+    await this.prisma.$executeRaw`
+      UPDATE "QuizSession"
+         SET "answers" = "answers" || jsonb_build_object(${questionId}::text, ${selectedOptionId}::text)
+       WHERE "id" = ${sessionId}
+         AND "userId" = ${userId}
+         AND "status" = 'OPEN'::"QuizSessionStatus"
+         AND ("answers" ->> ${questionId}) IS NULL`;
+
+    const fresh = await this.prisma.quizSession.findUniqueOrThrow({
+      where: { id: sessionId },
+      select: { answers: true },
+    });
+    const locked = (fresh.answers as Record<string, string>)[questionId] ?? selectedOptionId;
+
     const question = await this.prisma.question.findUnique({
       where: { id: questionId },
       select: { correctAnswerId: true, explanation: true },
@@ -80,10 +144,126 @@ export class QuizService {
     if (!question) throw new NotFoundException('Question not found');
 
     return {
-      correct: question.correctAnswerId === selectedOptionId,
+      correct: question.correctAnswerId === locked,
       correctOptionId: question.correctAnswerId,
       explanation: question.explanation,
     };
+  }
+
+  // ─── Sessions ───────────────────────────────────────────────────────────────
+
+  /** Grades a session exactly once. The OPEN -> SUBMITTED flip is a single
+   *  conditional UPDATE, so concurrent or repeated submissions of the same
+   *  session lose the race and are rejected. Answers locked in through
+   *  [checkAnswer] take precedence over the submitted ones. */
+  async gradeAndCloseSession(
+    userId: string,
+    sessionId: string,
+    submitted: { questionId: string; selectedOptionId: string }[],
+  ): Promise<GradedSession> {
+    const session = await this._openSession(userId, sessionId);
+
+    const closed = await this.prisma.quizSession.updateMany({
+      where: { id: sessionId, userId, status: QuizSessionStatus.OPEN },
+      data: { status: QuizSessionStatus.SUBMITTED, submittedAt: new Date() },
+    });
+    if (closed.count === 0) {
+      throw new BadRequestException('This quiz was already submitted');
+    }
+
+    const locked = session.answers as Record<string, string>;
+    const sent = new Map(submitted.map((a) => [a.questionId, a.selectedOptionId]));
+
+    const questions = await this.prisma.question.findMany({
+      where: { id: { in: session.questionIds } },
+      select: { id: true, correctAnswerId: true },
+    });
+    const correctById = new Map(questions.map((q) => [q.id, q.correctAnswerId]));
+
+    const correctIds = session.questionIds.filter((id) => {
+      const chosen = locked[id] ?? sent.get(id);
+      return chosen !== undefined && correctById.get(id) === chosen;
+    });
+
+    return {
+      sessionId,
+      subjectId: session.subjectId,
+      questionIds: session.questionIds,
+      correctIds,
+    };
+  }
+
+  /** Pays XP + coins for the correct answers of a graded session, skipping
+   *  questions already rewarded this week and respecting the daily cap.
+   *  Returns what was actually paid. */
+  async rewardQuizCorrects(userId: string, graded: GradedSession) {
+    const now = new Date();
+    const weekKey = this._lagosWeekKey(now);
+    const paidToday = await this.ledger.sumSince(
+      userId,
+      LedgerCurrency.XP,
+      'quiz',
+      this._lagosDayStart(now),
+    );
+    let roomXp = Math.max(0, QUIZ_DAILY_REWARD_CAP - paidToday);
+
+    let earnedXp = 0;
+    let earnedCoins = 0;
+    await this.prisma.$transaction(async (tx) => {
+      for (const questionId of graded.correctIds) {
+        if (roomXp < QUIZ_XP_PER_CORRECT) break;
+        const res = await this.ledger.grant(
+          {
+            userId,
+            xp: QUIZ_XP_PER_CORRECT,
+            coins: QUIZ_COINS_PER_CORRECT,
+            reason: 'quiz',
+            key: `quiz:${userId}:${questionId}:${weekKey}`,
+            refType: 'question',
+            refId: questionId,
+          },
+          tx,
+        );
+        if (res.applied) {
+          earnedXp += res.xp;
+          earnedCoins += res.coins;
+          roomXp -= res.xp;
+        }
+      }
+    });
+    return { earnedXp, earnedCoins };
+  }
+
+  private async _openSession(userId: string, sessionId: string) {
+    const session = await this.prisma.quizSession.findFirst({
+      where: { id: sessionId, userId },
+    });
+    if (!session) throw new NotFoundException('Quiz session not found');
+    if (session.status !== QuizSessionStatus.OPEN) {
+      throw new BadRequestException('This quiz was already submitted');
+    }
+    if (Date.now() - session.createdAt.getTime() > QUIZ_SESSION_TTL_MS) {
+      throw new BadRequestException('This quiz session has expired');
+    }
+    return session;
+  }
+
+  /** Instant at which the current Lagos calendar day began. */
+  private _lagosDayStart(now: Date): Date {
+    const lagos = new Date(now.getTime() + LAGOS_OFFSET_MS);
+    return new Date(
+      Date.UTC(lagos.getUTCFullYear(), lagos.getUTCMonth(), lagos.getUTCDate()) - LAGOS_OFFSET_MS,
+    );
+  }
+
+  /** `YYYY-MM-DD` of the Monday starting the current Lagos week. */
+  private _lagosWeekKey(now: Date): string {
+    const lagos = new Date(now.getTime() + LAGOS_OFFSET_MS);
+    const sinceMonday = (lagos.getUTCDay() + 6) % 7;
+    const monday = new Date(
+      Date.UTC(lagos.getUTCFullYear(), lagos.getUTCMonth(), lagos.getUTCDate() - sinceMonday),
+    );
+    return monday.toISOString().slice(0, 10);
   }
 
   // ─── POST /quiz/submit ──────────────────────────────────────────────────────
@@ -91,38 +271,29 @@ export class QuizService {
   async submitQuizResults(
     userId: string,
     dto: {
-      subjectId: string;
+      sessionId: string;
       answers: { questionId: string; selectedOptionId: string }[];
       timeTaken: number;
     },
   ) {
-    const COINS_PER_CORRECT = 10;
-    const XP_PER_CORRECT = 10;
+    // Grade server-side against the session the server issued: the client
+    // supplies only the session id and its picks, never the question list
+    // or a score.
+    const graded = await this.gradeAndCloseSession(userId, dto.sessionId, dto.answers);
+    const totalQuestions = graded.questionIds.length;
+    const correctAnswers = graded.correctIds.length;
 
-    // Grade server-side: look up the real correctAnswerId for every
-    // question submitted, rather than trusting a client-reported score.
-    const questions = await this.prisma.question.findMany({
-      where: { id: { in: dto.answers.map((a) => a.questionId) } },
-      select: { id: true, correctAnswerId: true },
-    });
-    const correctById = new Map(questions.map((q) => [q.id, q.correctAnswerId]));
-
-    const totalQuestions = dto.answers.length;
-    const correctAnswers = dto.answers.filter(
-      (a) => correctById.get(a.questionId) === a.selectedOptionId,
-    ).length;
-
-    const earnedCoins = correctAnswers * COINS_PER_CORRECT;
-    const earnedXp = correctAnswers * XP_PER_CORRECT;
+    const { earnedXp, earnedCoins } = await this.rewardQuizCorrects(userId, graded);
+    const subjectId = graded.subjectId;
 
     // Subject-specific accuracy, for Challenge matchmaking - separate
     // from the global rolling `accuracy` below, since a student can be
     // strong in one subject and weak in another.
     await this.prisma.subjectStat.upsert({
-      where: { userId_subjectId: { userId, subjectId: dto.subjectId } },
+      where: { userId_subjectId: { userId, subjectId } },
       create: {
         userId,
-        subjectId: dto.subjectId,
+        subjectId,
         questionsAnswered: totalQuestions,
         correctAnswers,
       },
@@ -137,8 +308,6 @@ export class QuizService {
     const user = await this.prisma.user.update({
       where: { id: userId },
       data: {
-        coins: { increment: earnedCoins },
-        xp: { increment: earnedXp },
         questionsAnswered: { increment: totalQuestions },
         // Recalculate accuracy as rolling average
         accuracy: {

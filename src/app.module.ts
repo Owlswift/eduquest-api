@@ -1,6 +1,9 @@
 import { Module } from '@nestjs/common';
+import { APP_GUARD } from '@nestjs/core';
+import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
 import { ConfigModule } from '@nestjs/config';
 import { PrismaModule } from './database/prisma.module';
+import { LedgerModule } from './modules/ledger/ledger.module';
 import { HealthModule } from './modules/health/health.module';
 import { AuthModule } from './modules/auth/auth.module';
 import { UsersModule } from './modules/users/users.module';
@@ -21,7 +24,11 @@ import { AdminModule } from './modules/admin/admin.module';
 @Module({
   imports: [
     ConfigModule.forRoot({ isGlobal: true }),
+    // Default for every route: 120 requests/min per client IP. Sensitive
+    // routes (auth, quiz submit) tighten it with @Throttle.
+    ThrottlerModule.forRoot([{ name: 'default', ttl: 60_000, limit: 120 }]),
     PrismaModule,
+    LedgerModule,
     MailerModule,
     PushModule,
     NotificationsModule,
@@ -39,5 +46,6 @@ import { AdminModule } from './modules/admin/admin.module';
     ChallengesModule,
     RewardsModule,
   ],
+  providers: [{ provide: APP_GUARD, useClass: ThrottlerGuard }],
 })
 export class AppModule {}
