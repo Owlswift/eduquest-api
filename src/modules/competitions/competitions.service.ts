@@ -1,10 +1,11 @@
 import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { AttemptSource, Prisma, QuizSessionStatus } from '@prisma/client';
+import { lagosDate } from '../../common/time/lagos';
 import { publicName } from '../../common/names';
 import { PrismaService } from '../../database/prisma.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import {
-  checkEligibility, effectiveStatus, legacyStatus, sittingDeadline, TIE_BREAK_TEXT,
+  checkEligibility, effectiveStatus, legacyStatus, LEAGUE_TIE_BREAK_TEXT, sittingDeadline, TIE_BREAK_TEXT,
 } from './competition-rules';
 import { CompetitionSittingsService } from './competition-sittings.service';
 
@@ -94,18 +95,35 @@ export class CompetitionsService {
       this.qualificationOf(userId, id),
     ]);
     const session = entry ? await this.prisma.quizSession.findUnique({ where: { userId_competitionId: { userId, competitionId: id } } }) : null;
+    const league = c.format === 'POINTS_LEAGUE';
+    const today = league && entry
+      ? ((await this.prisma.competitionDailyPoints.findUnique({ where: { competitionId_userId_day: { competitionId: id, userId, day: lagosDate() } } }))?.points ?? 0)
+      : 0;
     return {
       ...this.summary(c, user, entry ?? undefined, qual ?? undefined),
       description: c.description,
       completedCount: completed,
-      scoring: {
-        questionCount: c.questionCount,
-        pointsPerCorrect: c.pointsPerCorrect,
-        penaltyPerWrong: c.penaltyPerWrong,
-        timeLimitSec: c.timeLimitSec,
-        tieBreak: TIE_BREAK_TEXT,
-        revealsAnswers: 'Correct answers are shown after the competition closes.',
-      },
+      scoring: league
+        ? {
+            questionCount: null,
+            pointsPerCorrect: null,
+            penaltyPerWrong: null,
+            timeLimitSec: null,
+            pointsPerQuiz: c.pointsPerQuiz,
+            dailyPointsCap: c.dailyPointsCap,
+            minQuestionsPerQuiz: c.minQuestionsPerQuiz,
+            tieBreak: LEAGUE_TIE_BREAK_TEXT,
+            revealsAnswers: null,
+          }
+        : {
+            questionCount: c.questionCount,
+            pointsPerCorrect: c.pointsPerCorrect,
+            penaltyPerWrong: c.penaltyPerWrong,
+            timeLimitSec: c.timeLimitSec,
+            tieBreak: TIE_BREAK_TEXT,
+            revealsAnswers: 'Correct answers are shown after the competition closes.',
+          },
+      league: league ? { pointsPerQuiz: c.pointsPerQuiz, dailyPointsCap: c.dailyPointsCap, minQuestionsPerQuiz: c.minQuestionsPerQuiz, pointsToday: today, pointsLeftToday: c.dailyPointsCap == null ? null : Math.max(0, c.dailyPointsCap - today) } : null,
       participation: { xp: c.participationXp, coins: c.participationCoins },
       claimDeadlineDays: c.claimDeadlineDays,
       subjectIds: c.subjectIds,
@@ -153,6 +171,9 @@ export class CompetitionsService {
       state: c.state,
       timeLimitSec: c.timeLimitSec,
       questionCount: c.questionCount,
+      // Points leagues: what a quiz is worth and the most a student can earn in a day.
+      pointsPerQuiz: c.pointsPerQuiz,
+      dailyPointsCap: c.dailyPointsCap,
       eligible: elig.eligible,
       ineligibleReason: elig.reason ?? null,
       // Stages: a final may be open only to those who qualified for it.
@@ -200,6 +221,7 @@ export class CompetitionsService {
    */
   async start(userId: string, id: string) {
     const c = await this.load(id);
+    if (c.format === 'POINTS_LEAGUE') throw new BadRequestException('This is a points league: there is nothing to start. Practise quizzes while you are entered and they earn points');
     if (c.format !== 'FIXED_SET') throw new BadRequestException('This competition is ranked by XP earned, not by a sitting');
     if (c.status === 'PUBLISHED') throw new BadRequestException(`This competition opens ${c.startsAt.toISOString()}`);
     if (c.status !== 'ACTIVE') throw new BadRequestException('This competition has closed');
@@ -277,7 +299,30 @@ export class CompetitionsService {
 
   async leaderboard(userId: string, id: string, limit = 20) {
     const c = await this.load(id);
+    if (c.format === 'POINTS_LEAGUE') return this.leagueLeaderboard(userId, c, limit);
     return c.format === 'FIXED_SET' ? this.sittingLeaderboard(userId, c, limit) : this.xpWindowLeaderboard(userId, c, limit);
+  }
+
+  /** Total points, best first; level totals go to whoever reached them first. Entrants who have not scored are not ranked. */
+  private async leagueLeaderboard(userId: string, c: CompetitionRow, limit: number) {
+    const rows = await this.prisma.$queryRaw<{ userId: string; fullName: string; state: string | null; score: number; pos: number }[]>(Prisma.sql`
+      SELECT p."userId", u."fullName", u."state", p."score",
+             (ROW_NUMBER() OVER (ORDER BY p."score" DESC, p."completedAt" ASC))::int AS pos
+        FROM "CompetitionParticipant" p JOIN "User" u ON u."id" = p."userId"
+       WHERE p."competitionId" = ${c.id} AND p."status" = 'COMPLETED' AND p."score" > 0`);
+    const view = (r: (typeof rows)[number]) => ({ rank: r.pos, name: publicName(r.fullName), state: r.state, points: r.score, isMe: r.userId === userId });
+    return {
+      format: 'POINTS_LEAGUE' as const,
+      title: c.title,
+      metric: 'Points',
+      tieBreak: LEAGUE_TIE_BREAK_TEXT,
+      lifecycle: c.status,
+      final: c.status === 'FINALISED' || c.status === 'ARCHIVED',
+      entered: c._count.participants,
+      scored: rows.length,
+      top: rows.slice(0, limit).map(view),
+      me: rows.find((r) => r.userId === userId) ? view(rows.find((r) => r.userId === userId)!) : null,
+    };
   }
 
   /** One query ranks every completed entry (no per-student lookups). */

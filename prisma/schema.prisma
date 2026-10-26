@@ -99,6 +99,8 @@ enum CompetitionType {
 enum CompetitionFormat {
   XP_WINDOW
   FIXED_SET
+  /// A league: every qualifying quiz earns a fixed number of points, up to a daily maximum.
+  POINTS_LEAGUE
 }
 
 /// DRAFT -> PUBLISHED -> ACTIVE (starts) -> CLOSED (ends; validation) ->
@@ -240,6 +242,8 @@ model User {
   dailyActivities      DailyActivity[]
   competitionEntries   CompetitionParticipant[]
   qualifications       CompetitionQualification[]
+  pointsEntries        CompetitionPointsEntry[]
+  dailyPoints          CompetitionDailyPoints[]
   refreshTokens        RefreshToken[]
   /// Access tokens issued before this moment are refused (set when the password changes).
   tokensValidFrom      DateTime?
@@ -648,6 +652,14 @@ model Competition {
   /// Days a winner has to claim a prize before it can pass to the next place.
   claimDeadlineDays  Int       @default(14)
 
+  // Scoring (POINTS_LEAGUE).
+  /// Points each qualifying quiz earns.
+  pointsPerQuiz       Int?
+  /// Most points one student can earn per Lagos day. Null = no maximum.
+  dailyPointsCap      Int?
+  /// A quiz counts only if it had at least this many questions.
+  minQuestionsPerQuiz Int @default(5)
+
   // Stages: a qualifier (e.g. a state round) can feed a later one (the national
   // final). Only students it qualified can enter a competition that
   // requires qualification.
@@ -667,6 +679,8 @@ model Competition {
   previousStages  Competition[]              @relation("CompetitionStages")
   qualifications  CompetitionQualification[] @relation("QualifiedFor")
   qualifiedOnward CompetitionQualification[] @relation("QualifiedFrom")
+  pointsEntries   CompetitionPointsEntry[]
+  dailyPoints     CompetitionDailyPoints[]
 
   participants CompetitionParticipant[]
   prizeList    CompetitionPrize[]
@@ -676,6 +690,39 @@ model Competition {
   @@index([startsAt, endsAt])
   @@index([status])
   @@index([nextStageId])
+}
+
+/// One quiz that was scored for a league. Unique per quiz session, so a quiz can never be counted twice.
+model CompetitionPointsEntry {
+  id            String   @id @default(cuid())
+  competitionId String
+  userId        String
+  sessionId     String
+  /// Points awarded (0 when the daily maximum had been reached).
+  points        Int
+  /// The Lagos calendar day it counted towards.
+  day           DateTime @db.Date
+  createdAt     DateTime @default(now())
+
+  competition Competition @relation(fields: [competitionId], references: [id], onDelete: Cascade)
+  user        User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([competitionId, sessionId])
+  @@index([competitionId, userId])
+}
+
+/// Points one student has earned in a league on one Lagos day; its row lock is what enforces the daily maximum.
+model CompetitionDailyPoints {
+  id            String   @id @default(cuid())
+  competitionId String
+  userId        String
+  day           DateTime @db.Date
+  points        Int      @default(0)
+
+  competition Competition @relation(fields: [competitionId], references: [id], onDelete: Cascade)
+  user        User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([competitionId, userId, day])
 }
 
 /// A student who earned a place in a later stage by finishing high enough in

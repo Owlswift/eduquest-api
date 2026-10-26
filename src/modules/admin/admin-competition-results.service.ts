@@ -81,8 +81,10 @@ export class AdminCompetitionResultsService {
     const c = await this.load(competitionId);
     if (c.status !== 'CLOSED') throw new ConflictException('Validation runs on a closed competition that has not been finalised');
 
-    const settled = await this.settleOpenSittings(competitionId);
-    const flagged = await this.flagIdenticalSheets(competitionId);
+    // A league has no sittings or answer sheets: there is nothing to grade or compare.
+    const league = c.format === 'POINTS_LEAGUE';
+    const settled = league ? 0 : await this.settleOpenSittings(competitionId);
+    const flagged = league ? 0 : await this.flagIdenticalSheets(competitionId);
     await this.audit.log({
       adminId,
       action: 'competition.validate',
@@ -170,8 +172,10 @@ export class AdminCompetitionResultsService {
     if (c.status === 'FINALISED' || c.status === 'ARCHIVED') throw new ConflictException('These results were already finalised');
     if (c.status !== 'CLOSED') throw new ConflictException('A competition can only be finalised after it closes');
 
-    await this.settleOpenSittings(competitionId);
-    await this.flagIdenticalSheets(competitionId);
+    if (c.format !== 'POINTS_LEAGUE') {
+      await this.settleOpenSittings(competitionId);
+      await this.flagIdenticalSheets(competitionId);
+    }
 
     const finalised = await this.prisma.$transaction(async (tx) => {
       const gate = await tx.competition.updateMany({ where: { id: competitionId, status: 'CLOSED' }, data: { status: 'FINALISED', finalisedAt: new Date() } });
@@ -327,7 +331,7 @@ export class AdminCompetitionResultsService {
       await this.prisma.competition.updateMany({ where: { id, status: c.status }, data: { status: next } });
       c.status = next;
     }
-    if (c.format !== 'FIXED_SET') throw new BadRequestException('This competition is ranked by XP earned and has no sittings to validate');
+    if (c.format === 'XP_WINDOW') throw new BadRequestException('This competition is ranked by XP earned and has no sittings to validate');
     return c;
   }
 }

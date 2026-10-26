@@ -1,6 +1,6 @@
 import {
   answerFingerprint, checkEligibility, compareEntries, effectiveStatus, legacyStatus, prizeForPosition,
-  prizeRangeProblems, qualifiersFrom, scoreSitting, sittingDeadline, sittingFlags, StageRule, stageLinkProblems,
+  leagueAward, prizeRangeProblems, qualifiersFrom, quizCountsForLeague, scoreSitting, sittingDeadline, sittingFlags, StageRule, stageLinkProblems,
 } from './competition-rules';
 
 const t = (iso: string) => new Date(iso);
@@ -191,5 +191,23 @@ describe('stages', () => {
       const other = stage({ id: 'q2', nextStageId: 'f', endsAt: d('2026-12-03T00:00:00Z') });
       expect(stageLinkProblems(from, final, 5, [from, other, final])).toEqual([]);
     });
+  });
+});
+
+describe('points league rules', () => {
+  const c = { pointsPerQuiz: 10, dailyPointsCap: 30, minQuestionsPerQuiz: 5, subjectIds: [] as string[] };
+  it('gives the fixed amount per quiz until the daily maximum, then trims, then nothing', () => {
+    expect([0, 10, 20, 25, 30, 35].map((used) => leagueAward(c, used))).toEqual([10, 10, 10, 5, 0, 0]);
+  });
+  it('has no daily maximum when none is set', () => {
+    expect(leagueAward({ pointsPerQuiz: 10, dailyPointsCap: null }, 10_000)).toBe(10);
+  });
+  it('counts a quiz only if it is long enough and in a subject of the league', () => {
+    expect(quizCountsForLeague(c, { questionCount: 5, subjectIds: ['math'] })).toBe(true);
+    expect(quizCountsForLeague(c, { questionCount: 4, subjectIds: ['math'] })).toBe(false);
+    const maths = { ...c, subjectIds: ['math'] };
+    expect(quizCountsForLeague(maths, { questionCount: 10, subjectIds: ['english'] })).toBe(false);
+    expect(quizCountsForLeague(maths, { questionCount: 10, subjectIds: ['english', 'math'] })).toBe(true); // a mixed daily quiz
+    expect(quizCountsForLeague({ ...c, pointsPerQuiz: null }, { questionCount: 10, subjectIds: [] })).toBe(false);
   });
 });

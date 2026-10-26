@@ -4,6 +4,9 @@ import {
 } from 'class-validator';
 import { Transform } from 'class-transformer';
 import { ClassLevel, CompetitionType, PrizeKind, Region } from '@prisma/client';
+
+/** What a competition is scored by: one fixed set of questions, or a league of points earned from practice quizzes. */
+export const CREATABLE_FORMATS = ['FIXED_SET', 'POINTS_LEAGUE'] as const;
 import { canonicalState, NIGERIAN_STATES } from '../../../common/geo/nigerian-states';
 
 export class PrizeInputDto {
@@ -37,8 +40,16 @@ export class CreateCompetitionDto {
   /** Required for REGIONAL competitions. */
   @IsOptional() @IsEnum(Region) region?: Region;
 
+  /** Defaults to FIXED_SET. */
+  @IsOptional() @IsIn(CREATABLE_FORMATS as unknown as string[]) format?: (typeof CREATABLE_FORMATS)[number];
+
   // How it is scored.
-  @IsInt() @Min(5) @Max(100) questionCount!: number;
+  /** Required for FIXED_SET. */
+  @IsOptional() @IsInt() @Min(5) @Max(100) questionCount?: number;
+  // POINTS_LEAGUE: a fixed number of points per qualifying quiz, up to a daily maximum.
+  @IsOptional() @IsInt() @Min(1) @Max(1000) pointsPerQuiz?: number;
+  @IsOptional() @IsInt() @Min(1) @Max(100_000) dailyPointsCap?: number;
+  @IsOptional() @IsInt() @Min(1) @Max(50) minQuestionsPerQuiz?: number;
   @IsOptional() @IsInt() @Min(1) @Max(10) pointsPerCorrect?: number;
   @IsOptional() @IsInt() @Min(0) @Max(10) penaltyPerWrong?: number;
   /** Minutes a student has once they start; leave empty for "until it closes". */
@@ -84,6 +95,9 @@ export class UpdateCompetitionDto {
   @IsOptional() @IsInt() @Min(0) @Max(5000) participationXp?: number;
   @IsOptional() @IsInt() @Min(0) @Max(5000) participationCoins?: number;
   @IsOptional() @IsInt() @Min(1) @Max(90) claimDeadlineDays?: number;
+  @IsOptional() @IsInt() @Min(1) @Max(1000) pointsPerQuiz?: number;
+  @IsOptional() @IsInt() @Min(1) @Max(100_000) dailyPointsCap?: number;
+  @IsOptional() @IsInt() @Min(1) @Max(50) minQuestionsPerQuiz?: number;
 
   // Stages. Leave out for an ordinary standalone competition.
   /** Entry only for students an earlier stage qualified (e.g. a national final). */

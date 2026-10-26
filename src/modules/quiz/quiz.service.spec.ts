@@ -21,7 +21,7 @@ describe('QuizService', () => {
   let ledger: { grant: jest.Mock; sumSince: jest.Mock };
   let attempts: { record: jest.Mock };
   let achievements: { evaluate: jest.Mock };
-  let sittings: { record: jest.Mock };
+  let sittings: { record: jest.Mock; recordLeaguePoints: jest.Mock };
   let service: QuizService;
 
   const openSession = (over: Record<string, unknown> = {}) => ({
@@ -55,7 +55,7 @@ describe('QuizService', () => {
     ledger = { grant: jest.fn(), sumSince: jest.fn().mockResolvedValue(0) };
     attempts = { record: jest.fn().mockResolvedValue(0) };
     achievements = { evaluate: jest.fn().mockResolvedValue([]) };
-    sittings = { record: jest.fn() };
+    sittings = { record: jest.fn(), recordLeaguePoints: jest.fn().mockResolvedValue([]) };
     service = new QuizService(prisma as any, activity as any, ledger as any, attempts as any, achievements as any, sittings as any);
   });
 

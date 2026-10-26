@@ -187,3 +187,29 @@ export function stageLinkProblems(from: StageRule, next: StageRule, advanceCount
   }
   return problems;
 }
+
+// ─── Points league ────────────────────────────────────────────────────────────
+
+export interface LeagueRule {
+  pointsPerQuiz: number | null;
+  dailyPointsCap: number | null;
+  minQuestionsPerQuiz: number;
+  /** Empty = every subject counts. */
+  subjectIds: string[];
+}
+
+/** Whether a finished quiz counts towards a league: long enough, and in one of its subjects. */
+export function quizCountsForLeague(c: LeagueRule, quiz: { questionCount: number; subjectIds: string[] }): boolean {
+  if (!c.pointsPerQuiz) return false;
+  if (quiz.questionCount < c.minQuestionsPerQuiz) return false;
+  return c.subjectIds.length === 0 || quiz.subjectIds.some((s) => c.subjectIds.includes(s));
+}
+
+/** Points a quiz earns given what the student already earned today: the fixed amount, trimmed to the room left under the daily maximum. */
+export function leagueAward(c: Pick<LeagueRule, 'pointsPerQuiz' | 'dailyPointsCap'>, earnedToday: number): number {
+  const per = c.pointsPerQuiz ?? 0;
+  if (c.dailyPointsCap == null) return per;
+  return Math.max(0, Math.min(per, c.dailyPointsCap - earnedToday));
+}
+
+export const LEAGUE_TIE_BREAK_TEXT = 'Every point counts. If two students have the same total, the one who reached it first ranks higher.';

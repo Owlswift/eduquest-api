@@ -486,6 +486,15 @@ export class QuizService {
     await this.activity.recordQuestions(userId, totalQuestions);
     await this.activity.recordXp(userId, earnedXp);
 
+    // Practice quizzes also score in any points league the student has joined.
+    const leagues = graded.competitionId
+      ? []
+      : await this.sittings.recordLeaguePoints(userId, {
+          sessionId: graded.sessionId,
+          questionCount: totalQuestions,
+          subjectIds: (graded.bySubject ?? [{ subjectId: graded.subjectId }]).map((r) => r.subjectId),
+        });
+
     // Real ranks by XP - stateRank is null (not fabricated) if the
     // student hasn't set a state, since there's nothing real to compare.
     const [aheadNationally, aheadInState] = await Promise.all([
@@ -517,6 +526,8 @@ export class QuizService {
       totalXp: fresh.xp,
       level: levelProgress(fresh.xp),
       daily: isDaily ? { completed: true, perfect: dailyPerfect } : undefined,
+      // Points this quiz earned in each points league the student is in.
+      leagues: leagues.length > 0 ? leagues : undefined,
       competition: competition
         ? { id: graded.competitionId, score: competition.score, correct: competition.correct, wrong: competition.wrong, timeTakenSec: competition.timeTakenSec, rank: competition.rank }
         : undefined,

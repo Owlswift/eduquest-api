@@ -73,6 +73,9 @@ export class AdminCompetitionsService {
       state: c.state,
       region: c.region,
       questionCount: c.questionCount,
+      pointsPerQuiz: c.pointsPerQuiz,
+      dailyPointsCap: c.dailyPointsCap,
+      minQuestionsPerQuiz: c.minQuestionsPerQuiz,
       questionsFrozen: c.questionIds.length > 0,
       pointsPerCorrect: c.pointsPerCorrect,
       penaltyPerWrong: c.penaltyPerWrong,
@@ -129,6 +132,8 @@ export class AdminCompetitionsService {
     const endsAt = new Date(dto.endsAt);
     this.assertWindow(startsAt, endsAt);
     this.assertScope(dto.type, dto.state, dto.region);
+    const format = dto.format ?? 'FIXED_SET';
+    this.assertScoring(format, dto);
     const prizes = this.checkedPrizes(dto.prizes ?? []);
     if (dto.timeLimitMinutes && dto.timeLimitMinutes * 60_000 > endsAt.getTime() - startsAt.getTime()) {
       throw new BadRequestException('The time limit is longer than the competition itself');
@@ -146,13 +151,16 @@ export class AdminCompetitionsService {
         startsAt,
         endsAt,
         type: dto.type,
-        format: 'FIXED_SET',
+        format,
         status: 'DRAFT',
         classLevels: dto.classLevels ?? [],
         subjectIds: dto.subjectIds ?? [],
         state: dto.type === 'STATE' ? dto.state! : null,
         region: dto.type === 'REGIONAL' ? dto.region! : null,
-        questionCount: dto.questionCount,
+        questionCount: format === 'FIXED_SET' ? dto.questionCount : null,
+        pointsPerQuiz: format === 'POINTS_LEAGUE' ? dto.pointsPerQuiz : null,
+        dailyPointsCap: format === 'POINTS_LEAGUE' ? (dto.dailyPointsCap ?? null) : null,
+        minQuestionsPerQuiz: dto.minQuestionsPerQuiz ?? 5,
         pointsPerCorrect: dto.pointsPerCorrect ?? 1,
         penaltyPerWrong: dto.penaltyPerWrong ?? 0,
         timeLimitSec: dto.timeLimitMinutes ? dto.timeLimitMinutes * 60 : null,
@@ -211,6 +219,9 @@ export class AdminCompetitionsService {
       throw new BadRequestException('The time limit is longer than the competition itself');
     }
 
+    if (before.format === 'POINTS_LEAGUE' && (dto.pointsPerQuiz !== undefined || dto.dailyPointsCap !== undefined)) {
+      this.assertScoring('POINTS_LEAGUE', { pointsPerQuiz: dto.pointsPerQuiz ?? before.pointsPerQuiz ?? undefined, dailyPointsCap: dto.dailyPointsCap ?? before.dailyPointsCap ?? undefined });
+    }
     // Stages: check the link as it will be, and the dates against both neighbours.
     const nextStageId = dto.nextStageId !== undefined ? dto.nextStageId : before.nextStageId;
     const advanceCount = nextStageId ? (dto.advanceCount !== undefined ? dto.advanceCount : before.advanceCount) : null;
@@ -238,6 +249,9 @@ export class AdminCompetitionsService {
           ...((dto.type !== undefined || dto.state !== undefined) && { state: type === 'STATE' ? state : null }),
           ...((dto.type !== undefined || dto.region !== undefined) && { region: type === 'REGIONAL' ? region : null }),
           ...(dto.questionCount !== undefined && { questionCount: dto.questionCount }),
+          ...(dto.pointsPerQuiz !== undefined && { pointsPerQuiz: dto.pointsPerQuiz }),
+          ...(dto.dailyPointsCap !== undefined && { dailyPointsCap: dto.dailyPointsCap }),
+          ...(dto.minQuestionsPerQuiz !== undefined && { minQuestionsPerQuiz: dto.minQuestionsPerQuiz }),
           ...(dto.pointsPerCorrect !== undefined && { pointsPerCorrect: dto.pointsPerCorrect }),
           ...(dto.penaltyPerWrong !== undefined && { penaltyPerWrong: dto.penaltyPerWrong }),
           ...(dto.timeLimitMinutes !== undefined && { timeLimitSec: dto.timeLimitMinutes * 60 }),
@@ -275,13 +289,25 @@ export class AdminCompetitionsService {
   async publish(adminId: string, id: string) {
     const c = await this.load(id);
     if (c.status !== 'DRAFT') throw new ConflictException('Only a draft can be published');
-    if (c.format !== 'FIXED_SET' || !c.questionCount) throw new BadRequestException('Set how many questions the competition has first');
+    if (c.format === 'POINTS_LEAGUE') {
+      if (!c.pointsPerQuiz) throw new BadRequestException('Set how many points each quiz earns first');
+    } else if (c.format !== 'FIXED_SET' || !c.questionCount) {
+      throw new BadRequestException('Set how many questions the competition has first');
+    }
     if (c.endsAt <= new Date()) throw new BadRequestException('The end date has passed. Edit the dates first');
     if (c.startsAt.getTime() < Date.now() - PUBLISH_LATE_TOLERANCE_MS) {
       throw new BadRequestException('The start date has passed. Edit the dates first');
     }
     if (c.type === 'STATE' && !c.state) throw new BadRequestException('A state competition needs a state');
     if (c.type === 'REGIONAL' && !c.region) throw new BadRequestException('A regional competition needs a region');
+
+    // A league has no question set: students earn points from their own practice quizzes.
+    if (c.format === 'POINTS_LEAGUE') {
+      const flipped = await this.prisma.competition.updateMany({ where: { id, status: 'DRAFT' }, data: { status: 'PUBLISHED', publishedAt: new Date() } });
+      if (flipped.count === 0) throw new ConflictException('This competition was just published by someone else');
+      await this.audit.log({ adminId, action: 'competition.publish', entityType: 'competition', entityId: id, summary: `Published league "${c.title}" (${c.pointsPerQuiz} points per quiz)`, before: { status: 'DRAFT' }, after: { status: 'PUBLISHED' } });
+      return this.get(id);
+    }
 
     const pool = await this.prisma.question.findMany({
       where: {
@@ -291,10 +317,11 @@ export class AdminCompetitionsService {
       },
       select: { id: true },
     });
-    if (pool.length < c.questionCount) {
-      throw new BadRequestException(`Only ${pool.length} published questions match, but the competition needs ${c.questionCount}`);
+    const needed = c.questionCount ?? 0; // set: checked above
+    if (pool.length < needed) {
+      throw new BadRequestException(`Only ${pool.length} published questions match, but the competition needs ${needed}`);
     }
-    const questionIds = shuffle(pool.map((q) => q.id)).slice(0, c.questionCount);
+    const questionIds = shuffle(pool.map((q) => q.id)).slice(0, needed);
 
     const flipped = await this.prisma.competition.updateMany({
       where: { id, status: 'DRAFT' },
@@ -371,6 +398,17 @@ export class AdminCompetitionsService {
   private async assertFeedersEndBefore(id: string, startsAt: Date) {
     const late = await this.prisma.competition.findFirst({ where: { nextStageId: id, endsAt: { gt: startsAt } }, select: { title: true } });
     if (late) throw new BadRequestException(`"${late.title}" feeds this competition and ends after the new start date`);
+  }
+
+  /** A fixed-set competition needs a question count; a league needs points per quiz and a sensible daily maximum. */
+  private assertScoring(format: string, d: { questionCount?: number; pointsPerQuiz?: number; dailyPointsCap?: number; timeLimitMinutes?: number }) {
+    if (format === 'POINTS_LEAGUE') {
+      if (!d.pointsPerQuiz) throw new BadRequestException('A points league needs the points each quiz earns');
+      if (d.dailyPointsCap != null && d.dailyPointsCap < d.pointsPerQuiz) throw new BadRequestException('The daily maximum must be at least the points of one quiz');
+      if (d.timeLimitMinutes) throw new BadRequestException('A points league is not timed');
+    } else if (!d.questionCount) {
+      throw new BadRequestException('A fixed-set competition needs a question count');
+    }
   }
 
   private assertScope(type: string, state?: string, region?: string) {
