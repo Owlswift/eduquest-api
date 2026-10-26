@@ -8,8 +8,9 @@ import { PrismaPg } from "@prisma/adapter-pg";
 const adapter = new PrismaPg(process.env.DATABASE_URL!);
 const prisma = new PrismaClient({ adapter });
 
-// apps/api/prisma -> apps
-const REPO_ROOT = path.resolve(__dirname, "../..");
+// Data lives in the sibling content-pipeline repo (eduquest/content-pipeline),
+// not inside this repo. Override per-folder with the env vars below.
+const REPO_ROOT = path.resolve(__dirname, "../../../content-pipeline");
 const MCQ_DIR = process.env.MCQ_IMPORT_DIR || path.join(REPO_ROOT, "mcq_import");
 const THEORY_DIR = process.env.THEORY_IMPORT_DIR || path.join(REPO_ROOT, "theory_import");
 

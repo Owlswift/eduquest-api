@@ -7,8 +7,8 @@ import { PrismaPg } from "@prisma/adapter-pg";
 const adapter = new PrismaPg(process.env.DATABASE_URL!);
 const prisma = new PrismaClient({ adapter });
 
-// apps/api/prisma -> apps
-const REPO_ROOT = path.resolve(__dirname, "../..");
+// Data lives in the sibling content-pipeline repo (eduquest/content-pipeline).
+const REPO_ROOT = path.resolve(__dirname, "../../../content-pipeline");
 const CURRICULUM_SCHEMA_DIR = path.join(REPO_ROOT, "curriculum-schema");
 
 const SS1_SUBJECT_MAP: Record<string, string> = {
