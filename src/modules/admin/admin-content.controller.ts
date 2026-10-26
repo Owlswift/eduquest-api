@@ -90,6 +90,12 @@ export class AdminContentController {
     return this.competitions.get(id);
   }
 
+  @Get('competitions/:id/qualifiers')
+  @ApiOperation({ summary: 'Students an earlier stage has qualified for this competition' })
+  qualifiers(@Param('id') id: string) {
+    return this.competitions.qualifiers(id);
+  }
+
   @Post('competitions')
   createCompetition(@CurrentUser() admin: any, @Body() dto: CreateCompetitionDto) {
     return this.competitions.create(admin.sub, dto);

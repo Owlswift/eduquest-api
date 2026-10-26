@@ -3,7 +3,7 @@ import { Prisma } from '@prisma/client';
 import { publicName } from '../../common/names';
 import { PrismaService } from '../../database/prisma.service';
 import { CertificatesService } from '../certificates/certificates.service';
-import { effectiveStatus, prizeForPosition } from '../competitions/competition-rules';
+import { effectiveStatus, prizeForPosition, qualifiersFrom } from '../competitions/competition-rules';
 import { AchievementsService } from '../gamification/achievements.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { QuizService } from '../quiz/quiz.service';
@@ -197,7 +197,8 @@ export class AdminCompetitionResultsService {
       if (awards.length > 0) await tx.prizeAward.createMany({ data: awards, skipDuplicates: true });
 
       const certs = await this.issueCertificates(tx, c, ranked as { userId: string; rank: number }[]);
-      return { ranked: ranked.length, awards: awards.length, certificates: certs };
+      const advancing = await this.qualify(tx, c, ranked as { userId: string; rank: number }[]);
+      return { ranked: ranked.length, awards: awards.length, certificates: certs, qualified: advancing.length, advancing };
     });
     if (!finalised) throw new ConflictException('These results were just finalised by someone else');
 
@@ -206,12 +207,14 @@ export class AdminCompetitionResultsService {
       action: 'competition.finalise',
       entityType: 'competition',
       entityId: competitionId,
-      summary: `Finalised "${c.title}": ${finalised.ranked} ranked, ${finalised.awards} prizes, ${finalised.certificates} certificates`,
+      summary: `Finalised "${c.title}": ${finalised.ranked} ranked, ${finalised.awards} prizes, ${finalised.certificates} certificates${finalised.qualified ? `, ${finalised.qualified} qualified for the next stage` : ''}`,
       before: { status: 'CLOSED' },
-      after: { status: 'FINALISED', ...finalised },
+      after: { status: 'FINALISED', ranked: finalised.ranked, awards: finalised.awards, certificates: finalised.certificates, qualified: finalised.qualified },
     });
     await this.announce(competitionId, c.title);
-    return { status: 'FINALISED' as const, ...finalised };
+    await this.announceQualified(c, finalised.advancing);
+    const { advancing: _advancing, ...result } = finalised;
+    return { status: 'FINALISED' as const, ...result };
   }
 
   async archive(adminId: string, competitionId: string) {
@@ -219,6 +222,44 @@ export class AdminCompetitionResultsService {
     if (r.count === 0) throw new ConflictException('Only finalised competitions can be archived');
     await this.audit.log({ adminId, action: 'competition.archive', entityType: 'competition', entityId: competitionId, summary: 'Archived', before: { status: 'FINALISED' }, after: { status: 'ARCHIVED' } });
     return { status: 'ARCHIVED' as const };
+  }
+
+  // ─── Stages ─────────────────────────────────────────────────────────────────
+
+  /**
+   * Sends the top finishers on to the next stage (inside the finalise
+   * transaction, so a finalised result and its qualifiers always agree). Only
+   * students who completed and were not disqualified are ranked, so only they
+   * can qualify. A student who already qualified from another round keeps
+   * their first place. Does nothing if the next stage has already closed.
+   */
+  private async qualify(tx: Prisma.TransactionClient, c: { id: string; nextStageId: string | null; advanceCount: number | null }, ranked: { userId: string; rank: number }[]) {
+    if (!c.nextStageId || !c.advanceCount) return [];
+    const next = await tx.competition.findUnique({ where: { id: c.nextStageId }, select: { status: true, startsAt: true, endsAt: true } });
+    if (!next || !['DRAFT', 'PUBLISHED', 'ACTIVE'].includes(effectiveStatus(next))) return [];
+    const top = qualifiersFrom(ranked, c.advanceCount);
+    if (top.length === 0) return [];
+    await tx.competitionQualification.createMany({
+      data: top.map((e) => ({ competitionId: c.nextStageId!, userId: e.userId, fromCompetitionId: c.id, fromRank: e.rank })),
+      skipDuplicates: true,
+    });
+    return top;
+  }
+
+  private async announceQualified(c: { id: string; title: string; nextStageId: string | null }, advancing: { userId: string; rank: number }[]) {
+    if (!c.nextStageId || advancing.length === 0) return;
+    const next = await this.prisma.competition.findUnique({ where: { id: c.nextStageId }, select: { title: true, startsAt: true } });
+    if (!next) return;
+    for (const e of advancing) {
+      await this.notifications.notify(
+        e.userId,
+        'competition_qualified',
+        `You qualified for ${next.title}`,
+        `You finished ${ordinal(e.rank)} in ${c.title}. ${next.title} opens ${next.startsAt.toDateString()}.`,
+        { competitionId: c.nextStageId },
+        { dedupeKey: `qualified:${c.nextStageId}:${e.userId}` },
+      );
+    }
   }
 
   // ─── Certificates and announcements ─────────────────────────────────────────

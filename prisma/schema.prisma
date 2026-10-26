@@ -239,6 +239,7 @@ model User {
   studentMastery       StudentMastery[]
   dailyActivities      DailyActivity[]
   competitionEntries   CompetitionParticipant[]
+  qualifications       CompetitionQualification[]
   rewardRedemptions    RewardRedemption[]
   passwordResetOtps    PasswordResetOtp[]
   notifications        Notification[]
@@ -644,10 +645,25 @@ model Competition {
   /// Days a winner has to claim a prize before it can pass to the next place.
   claimDeadlineDays  Int       @default(14)
 
+  // Stages: a qualifier (e.g. a state round) can feed a later one (the national
+  // final). Only students it qualified can enter a competition that
+  // requires qualification.
+  /// Entry is by qualification only (frozen at publish).
+  requiresQualification Boolean @default(false)
+  /// The competition the top finishers of this one go on to.
+  nextStageId           String?
+  /// How many of the top finishers advance. Required when nextStageId is set.
+  advanceCount          Int?
+
   publishedAt DateTime?
   finalisedAt DateTime?
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @default(now()) @updatedAt
+
+  nextStage       Competition?               @relation("CompetitionStages", fields: [nextStageId], references: [id], onDelete: SetNull)
+  previousStages  Competition[]              @relation("CompetitionStages")
+  qualifications  CompetitionQualification[] @relation("QualifiedFor")
+  qualifiedOnward CompetitionQualification[] @relation("QualifiedFrom")
 
   participants CompetitionParticipant[]
   prizeList    CompetitionPrize[]
@@ -656,6 +672,28 @@ model Competition {
 
   @@index([startsAt, endsAt])
   @@index([status])
+  @@index([nextStageId])
+}
+
+/// A student who earned a place in a later stage by finishing high enough in
+/// an earlier one. Created when the earlier competition is finalised.
+model CompetitionQualification {
+  id                String   @id @default(cuid())
+  /// The competition they may now enter.
+  competitionId     String
+  userId            String
+  /// Where they qualified from, and their finishing position there.
+  fromCompetitionId String
+  fromRank          Int
+  createdAt         DateTime @default(now())
+
+  competition     Competition @relation("QualifiedFor", fields: [competitionId], references: [id], onDelete: Cascade)
+  fromCompetition Competition @relation("QualifiedFrom", fields: [fromCompetitionId], references: [id], onDelete: Cascade)
+  user            User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([competitionId, userId])
+  @@index([userId])
+  @@index([fromCompetitionId])
 }
 
 /// A prize for a range of finishing positions, e.g. 1st, or 2nd to 3rd.

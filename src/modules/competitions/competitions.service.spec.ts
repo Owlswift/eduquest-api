@@ -17,6 +17,7 @@ describe('CompetitionsService', () => {
   beforeEach(() => {
     prisma = {
       competition: { findMany: jest.fn(), findFirst: jest.fn(), updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
+      competitionQualification: { findMany: jest.fn().mockResolvedValue([]), findUnique: jest.fn().mockResolvedValue(null) },
       competitionParticipant: { findMany: jest.fn().mockResolvedValue([]), findUnique: jest.fn(), createMany: jest.fn(), updateMany: jest.fn(), count: jest.fn() },
       user: { findUniqueOrThrow: jest.fn().mockResolvedValue({ classLevel: 'SS2', state: 'Lagos' }), findUnique: jest.fn().mockResolvedValue({ xp: 40 }) },
       quizSession: { findUnique: jest.fn(), create: jest.fn(), findUniqueOrThrow: jest.fn() },

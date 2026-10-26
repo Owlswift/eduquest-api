@@ -1,6 +1,6 @@
 import { Type } from 'class-transformer';
 import {
-  ArrayMaxSize, ArrayMinSize, IsArray, IsDateString, IsEnum, IsIn, IsInt, IsOptional, IsString, Max, MaxLength, Min, MinLength, ValidateNested,
+  ArrayMaxSize, ArrayMinSize, IsArray, IsBoolean, IsDateString, IsEnum, IsIn, IsInt, IsOptional, IsString, Max, MaxLength, Min, MinLength, ValidateNested,
 } from 'class-validator';
 import { Transform } from 'class-transformer';
 import { ClassLevel, CompetitionType, PrizeKind, Region } from '@prisma/client';
@@ -47,6 +47,14 @@ export class CreateCompetitionDto {
   @IsOptional() @IsInt() @Min(0) @Max(5000) participationCoins?: number;
   @IsOptional() @IsInt() @Min(1) @Max(90) claimDeadlineDays?: number;
 
+  // Stages. Leave out for an ordinary standalone competition.
+  /** Entry only for students an earlier stage qualified (e.g. a national final). */
+  @IsOptional() @IsBoolean() requiresQualification?: boolean;
+  /** The later competition this one's top finishers advance to. */
+  @IsOptional() @IsString() nextStageId?: string;
+  /** How many top finishers advance (required with nextStageId). */
+  @IsOptional() @IsInt() @Min(1) @Max(10_000) advanceCount?: number;
+
   @IsOptional() @IsArray() @ArrayMaxSize(30) @ValidateNested({ each: true }) @Type(() => PrizeInputDto) prizes?: PrizeInputDto[];
 
   @IsDateString() startsAt!: string;
@@ -76,6 +84,15 @@ export class UpdateCompetitionDto {
   @IsOptional() @IsInt() @Min(0) @Max(5000) participationXp?: number;
   @IsOptional() @IsInt() @Min(0) @Max(5000) participationCoins?: number;
   @IsOptional() @IsInt() @Min(1) @Max(90) claimDeadlineDays?: number;
+
+  // Stages. Leave out for an ordinary standalone competition.
+  /** Entry only for students an earlier stage qualified (e.g. a national final). */
+  @IsOptional() @IsBoolean() requiresQualification?: boolean;
+  /** The later competition this one's top finishers advance to. */
+  /** Send null to unlink. */
+  @IsOptional() @IsString() nextStageId?: string | null;
+  /** How many top finishers advance (required with nextStageId). */
+  @IsOptional() @IsInt() @Min(1) @Max(10_000) advanceCount?: number;
 
   @IsOptional() @IsArray() @ArrayMaxSize(30) @ValidateNested({ each: true }) @Type(() => PrizeInputDto) prizes?: PrizeInputDto[];
 

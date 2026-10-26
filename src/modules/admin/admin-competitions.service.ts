@@ -2,13 +2,17 @@ import { BadRequestException, ConflictException, Injectable, NotFoundException }
 import { CompetitionStatus, Prisma, QuestionStatus } from '@prisma/client';
 import { REGION_LABEL } from '../../common/geo/regions';
 import { PrismaService } from '../../database/prisma.service';
-import { effectiveStatus, prizeRangeProblems } from '../competitions/competition-rules';
+import { effectiveStatus, prizeRangeProblems, StageRule, stageLinkProblems } from '../competitions/competition-rules';
 import { AuditService } from './audit.service';
 import { CreateCompetitionDto, PrizeInputDto, UpdateCompetitionDto } from './dto/competition.dto';
 
-type Full = Prisma.CompetitionGetPayload<{ include: { prizeList: true; _count: { select: { participants: true } } } }>;
+const INCLUDE = {
+  prizeList: { orderBy: { sortOrder: 'asc' } },
+  nextStage: { select: { id: true, title: true } },
+  _count: { select: { participants: true, qualifications: true } },
+} as const;
 
-const INCLUDE = { prizeList: { orderBy: { sortOrder: 'asc' } }, _count: { select: { participants: true } } } as const;
+type Full = Prisma.CompetitionGetPayload<{ include: typeof INCLUDE }>;
 
 /** Window after the planned start in which a draft can still be published. */
 const PUBLISH_LATE_TOLERANCE_MS = 5 * 60_000;
@@ -77,6 +81,11 @@ export class AdminCompetitionsService {
       participationCoins: c.participationCoins,
       claimDeadlineDays: c.claimDeadlineDays,
       participants: c._count.participants,
+      // Stages: where this one leads, and who it has qualified for itself.
+      requiresQualification: c.requiresQualification,
+      nextStage: c.nextStage,
+      advanceCount: c.advanceCount,
+      qualified: c._count.qualifications,
       prizes: c.prizeList.map((p) => ({ id: p.id, positionFrom: p.positionFrom, positionTo: p.positionTo, title: p.title, kind: p.kind, coinAmount: p.coinAmount })),
       // What an admin can still change at this stage (see update()).
       editable: this.editable(c),
@@ -93,6 +102,26 @@ export class AdminCompetitionsService {
     return 'none';
   }
 
+  /** The students an earlier stage has qualified for this competition. */
+  async qualifiers(id: string) {
+    await this.load(id);
+    const rows = await this.prisma.competitionQualification.findMany({
+      where: { competitionId: id },
+      orderBy: [{ fromCompetitionId: 'asc' }, { fromRank: 'asc' }],
+      include: { user: { select: { fullName: true, email: true, state: true, classLevel: true } }, fromCompetition: { select: { title: true } } },
+    });
+    return rows.map((q) => ({
+      userId: q.userId,
+      fullName: q.user.fullName,
+      email: q.user.email,
+      state: q.user.state,
+      classLevel: q.user.classLevel,
+      fromCompetition: { id: q.fromCompetitionId, title: q.fromCompetition.title },
+      fromRank: q.fromRank,
+      qualifiedAt: q.createdAt,
+    }));
+  }
+
   // ─── Create / update ────────────────────────────────────────────────────────
 
   async create(adminId: string, dto: CreateCompetitionDto) {
@@ -105,6 +134,8 @@ export class AdminCompetitionsService {
       throw new BadRequestException('The time limit is longer than the competition itself');
     }
     await this.assertSubjects(dto.subjectIds ?? []);
+    if (dto.nextStageId) await this.assertStageLink({ id: 'new', status: 'DRAFT', startsAt, endsAt, nextStageId: dto.nextStageId, requiresQualification: !!dto.requiresQualification }, dto.nextStageId, dto.advanceCount);
+    else if (dto.advanceCount) throw new BadRequestException('advanceCount only applies when there is a next stage');
 
     const c = await this.prisma.competition.create({
       data: {
@@ -128,6 +159,9 @@ export class AdminCompetitionsService {
         participationXp: dto.participationXp ?? 0,
         participationCoins: dto.participationCoins ?? 0,
         claimDeadlineDays: dto.claimDeadlineDays ?? 14,
+        requiresQualification: dto.requiresQualification ?? false,
+        nextStageId: dto.nextStageId ?? null,
+        advanceCount: dto.nextStageId ? dto.advanceCount : null,
         prizeList: { create: prizes.map((p, i) => this.prizeData(p, i)) },
       },
       include: INCLUDE,
@@ -151,7 +185,8 @@ export class AdminCompetitionsService {
     const touched = Object.entries(dto).filter(([, v]) => v !== undefined).map(([k]) => k);
     const allowed: Record<string, string[]> = {
       wording: ['title', 'subtitle', 'description'],
-      schedule_and_prizes: ['title', 'subtitle', 'description', 'startsAt', 'endsAt', 'prizes', 'claimDeadlineDays'],
+      // Where the top finishers go next does not change how this one is played, so it can still be set.
+      schedule_and_prizes: ['title', 'subtitle', 'description', 'startsAt', 'endsAt', 'prizes', 'claimDeadlineDays', 'nextStageId', 'advanceCount'],
     };
     if (level !== 'all') {
       const forbidden = touched.filter((k) => !allowed[level].includes(k));
@@ -176,6 +211,16 @@ export class AdminCompetitionsService {
       throw new BadRequestException('The time limit is longer than the competition itself');
     }
 
+    // Stages: check the link as it will be, and the dates against both neighbours.
+    const nextStageId = dto.nextStageId !== undefined ? dto.nextStageId : before.nextStageId;
+    const advanceCount = nextStageId ? (dto.advanceCount !== undefined ? dto.advanceCount : before.advanceCount) : null;
+    const requiresQualification = dto.requiresQualification ?? before.requiresQualification;
+    if (!nextStageId && dto.advanceCount) throw new BadRequestException('advanceCount only applies when there is a next stage');
+    if (nextStageId && (dto.nextStageId || dto.advanceCount !== undefined || dto.startsAt || dto.endsAt)) {
+      await this.assertStageLink({ id, status: before.status, startsAt, endsAt, nextStageId, requiresQualification }, nextStageId, advanceCount);
+    }
+    if (dto.startsAt || dto.endsAt) await this.assertFeedersEndBefore(id, startsAt);
+
     const after = await this.prisma.$transaction(async (tx) => {
       if (prizes) {
         await tx.competitionPrize.deleteMany({ where: { competitionId: id } });
@@ -199,6 +244,8 @@ export class AdminCompetitionsService {
           ...(dto.participationXp !== undefined && { participationXp: dto.participationXp }),
           ...(dto.participationCoins !== undefined && { participationCoins: dto.participationCoins }),
           ...(dto.claimDeadlineDays !== undefined && { claimDeadlineDays: dto.claimDeadlineDays }),
+          ...(dto.requiresQualification !== undefined && { requiresQualification: dto.requiresQualification }),
+          ...((dto.nextStageId !== undefined || dto.advanceCount !== undefined) && { nextStageId: nextStageId ?? null, advanceCount }),
           ...(prizes && { prizes: prizes.map((p) => p.title) }),
           ...((dto.startsAt || dto.endsAt) && { startsAt, endsAt }),
         },
@@ -307,6 +354,23 @@ export class AdminCompetitionsService {
   private assertWindow(startsAt: Date, endsAt: Date) {
     if (Number.isNaN(startsAt.getTime()) || Number.isNaN(endsAt.getTime())) throw new BadRequestException('Invalid date');
     if (endsAt <= startsAt) throw new BadRequestException('The end date must be after the start date');
+  }
+
+  /** Rules every stage link must satisfy; reads the other competitions so loops and bad dates are caught. */
+  private async assertStageLink(from: StageRule, nextStageId: string, advanceCount: number | null | undefined) {
+    const rows = await this.prisma.competition.findMany({ select: { id: true, status: true, startsAt: true, endsAt: true, nextStageId: true, requiresQualification: true } });
+    const now = new Date();
+    const all: StageRule[] = rows.map((r) => ({ ...r, status: effectiveStatus(r, now) }));
+    const next = all.find((r) => r.id === nextStageId);
+    if (!next) throw new BadRequestException('The next stage does not exist');
+    const problems = stageLinkProblems(from, next, advanceCount, [...all.filter((r) => r.id !== from.id), from]);
+    if (problems.length > 0) throw new BadRequestException(problems.join('. '));
+  }
+
+  /** A competition that qualifiers feed cannot start before they have all ended. */
+  private async assertFeedersEndBefore(id: string, startsAt: Date) {
+    const late = await this.prisma.competition.findFirst({ where: { nextStageId: id, endsAt: { gt: startsAt } }, select: { title: true } });
+    if (late) throw new BadRequestException(`"${late.title}" feeds this competition and ends after the new start date`);
   }
 
   private assertScope(type: string, state?: string, region?: string) {

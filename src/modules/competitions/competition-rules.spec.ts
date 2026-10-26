@@ -1,6 +1,6 @@
 import {
   answerFingerprint, checkEligibility, compareEntries, effectiveStatus, legacyStatus, prizeForPosition,
-  prizeRangeProblems, scoreSitting, sittingDeadline, sittingFlags,
+  prizeRangeProblems, qualifiersFrom, scoreSitting, sittingDeadline, sittingFlags, StageRule, stageLinkProblems,
 } from './competition-rules';
 
 const t = (iso: string) => new Date(iso);
@@ -138,5 +138,58 @@ describe('prize ranges', () => {
     expect(prizeForPosition(prizes, 1)?.id).toBe('gold');
     expect(prizeForPosition(prizes, 3)?.id).toBe('silver');
     expect(prizeForPosition(prizes, 4)).toBeUndefined();
+  });
+});
+
+describe('stages', () => {
+  const d = (s: string) => new Date(s);
+  const stage = (over: Partial<StageRule> & { id: string }): StageRule => ({
+    status: 'DRAFT', startsAt: d('2026-12-10T00:00:00Z'), endsAt: d('2026-12-11T00:00:00Z'), nextStageId: null, requiresQualification: false, ...over,
+  });
+  const check = checkEligibility as (c: any, u: any, q?: boolean) => { eligible: boolean; reason?: string };
+
+  it('lets only qualified students into a qualification-only competition', () => {
+    const c = { type: 'NATIONAL', classLevels: [], state: null, region: null, requiresQualification: true };
+    const u = { classLevel: 'SS2', state: 'Lagos' };
+    expect(check(c, u, false)).toMatchObject({ eligible: false, reason: expect.stringMatching(/qualification/i) });
+    expect(check(c, u, true)).toEqual({ eligible: true });
+    // An ordinary competition ignores qualification entirely.
+    expect(check({ ...c, requiresQualification: false }, u, false)).toEqual({ eligible: true });
+  });
+
+  it('still applies class and place rules to qualified students', () => {
+    const c = { type: 'NATIONAL', classLevels: ['SS3'], state: null, region: null, requiresQualification: true };
+    expect(check(c, { classLevel: 'SS2', state: null }, true).eligible).toBe(false);
+  });
+
+  it('takes the top N by rank, best first, and copes with fewer entrants than places', () => {
+    const rows = [{ userId: 'c', rank: 3 }, { userId: 'a', rank: 1 }, { userId: 'b', rank: 2 }];
+    expect(qualifiersFrom(rows, 2).map((r) => r.userId)).toEqual(['a', 'b']);
+    expect(qualifiersFrom(rows, 10)).toHaveLength(3);
+    expect(qualifiersFrom(rows, 0)).toEqual([]);
+    expect(rows[0].userId).toBe('c'); // input untouched
+  });
+
+  describe('stageLinkProblems', () => {
+    const from = stage({ id: 'q', startsAt: d('2026-12-01T00:00:00Z'), endsAt: d('2026-12-02T00:00:00Z') });
+    const final = stage({ id: 'f', requiresQualification: true });
+    it('accepts a draft final that requires qualification and starts after the qualifier ends', () => {
+      expect(stageLinkProblems(from, final, 10, [from, final])).toEqual([]);
+    });
+    it('rejects every way a link can be wrong, with all reasons at once', () => {
+      const bad = stage({ id: 'f', status: 'ACTIVE', startsAt: d('2026-12-01T12:00:00Z') });
+      const problems = stageLinkProblems(from, bad, 0, [from, bad]);
+      expect(problems).toHaveLength(4);
+      expect(problems.join(' ')).toMatch(/how many.*qualification.*already started.*start after/s);
+    });
+    it('rejects a self link and a loop', () => {
+      expect(stageLinkProblems(from, from, 5, [from])).toEqual(['A competition cannot lead into itself']);
+      const loopFinal = stage({ id: 'f', requiresQualification: true, nextStageId: 'q' });
+      expect(stageLinkProblems(from, loopFinal, 5, [from, loopFinal]).join()).toMatch(/loop/);
+    });
+    it('allows several qualifiers to feed one final', () => {
+      const other = stage({ id: 'q2', nextStageId: 'f', endsAt: d('2026-12-03T00:00:00Z') });
+      expect(stageLinkProblems(from, final, 5, [from, other, final])).toEqual([]);
+    });
   });
 });

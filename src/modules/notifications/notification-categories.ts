@@ -14,6 +14,7 @@ export const NOTIFICATION_CATEGORY: Record<string, PreferenceKey> = {
   competition_open: 'competitions',
   competition_closing: 'competitions',
   competition_results: 'competitions',
+  competition_qualified: 'competitions',
   // Progress and recognition.
   achievement_unlocked: 'achievements',
   level_up: 'achievements',

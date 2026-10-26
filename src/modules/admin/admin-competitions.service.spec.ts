@@ -21,7 +21,7 @@ describe('AdminCompetitionsService', () => {
 
   beforeEach(() => {
     prisma = {
-      competition: { findMany: jest.fn(), findUnique: jest.fn(), create: jest.fn(), update: jest.fn(), updateMany: jest.fn().mockResolvedValue({ count: 1 }), delete: jest.fn() },
+      competition: { findMany: jest.fn(), findFirst: jest.fn().mockResolvedValue(null), findUnique: jest.fn(), create: jest.fn(), update: jest.fn(), updateMany: jest.fn().mockResolvedValue({ count: 1 }), delete: jest.fn() },
       competitionParticipant: { count: jest.fn().mockResolvedValue(0) },
       competitionPrize: { deleteMany: jest.fn(), createMany: jest.fn() },
       question: { findMany: jest.fn() },

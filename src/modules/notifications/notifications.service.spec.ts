@@ -10,7 +10,7 @@ describe('NotificationsService', () => {
       createMany: jest.Mock;
       findUnique: jest.Mock;
     };
-    notificationPreference: { findUnique: jest.Mock; findMany: jest.Mock; upsert: jest.Mock };
+    notificationPreference: { findUnique: jest.Mock; findUniqueOrThrow: jest.Mock; findMany: jest.Mock; createMany: jest.Mock; update: jest.Mock };
     $queryRaw: jest.Mock;
   };
   let push: { sendToUser: jest.Mock };
@@ -26,7 +26,7 @@ describe('NotificationsService', () => {
         createMany: jest.fn(),
         findUnique: jest.fn(),
       },
-      notificationPreference: { findUnique: jest.fn().mockResolvedValue(null), findMany: jest.fn().mockResolvedValue([]), upsert: jest.fn() },
+      notificationPreference: { findUnique: jest.fn().mockResolvedValue(null), findMany: jest.fn().mockResolvedValue([]), findUniqueOrThrow: jest.fn(), createMany: jest.fn(), update: jest.fn() },
       $queryRaw: jest.fn(),
     };
     push = { sendToUser: jest.fn().mockResolvedValue(undefined) };
@@ -79,10 +79,18 @@ describe('NotificationsService', () => {
     });
 
     it('stores only the changes the student sent', async () => {
-      prisma.notificationPreference.upsert.mockResolvedValue(prefs({ competitions: false }));
+      prisma.notificationPreference.update.mockResolvedValue(prefs({ competitions: false }));
       const out = await service.updatePreferences('u1', { competitions: false });
-      expect(prisma.notificationPreference.upsert).toHaveBeenCalledWith({ where: { userId: 'u1' }, create: { userId: 'u1', competitions: false }, update: { competitions: false } });
+      // Insert-if-missing first (atomic), then update only what was sent.
+      expect(prisma.notificationPreference.createMany).toHaveBeenCalledWith({ data: [{ userId: 'u1' }], skipDuplicates: true });
+      expect(prisma.notificationPreference.update).toHaveBeenCalledWith({ where: { userId: 'u1' }, data: { competitions: false } });
       expect(out).toEqual({ studyReminders: true, competitions: false, achievements: true, push: true });
+    });
+
+    it('reads the row back without updating anything when nothing was sent', async () => {
+      prisma.notificationPreference.findUniqueOrThrow.mockResolvedValue(prefs({}));
+      expect(await service.updatePreferences('u1', {})).toEqual({ studyReminders: true, competitions: true, achievements: true, push: true });
+      expect(prisma.notificationPreference.update).not.toHaveBeenCalled();
     });
 
     it('defaults to everything on for a student who never opened settings', async () => {

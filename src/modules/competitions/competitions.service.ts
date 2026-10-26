@@ -10,6 +10,9 @@ import { CompetitionSittingsService } from './competition-sittings.service';
 
 type CompetitionRow = Prisma.CompetitionGetPayload<{ include: { prizeList: true; _count: { select: { participants: true } } } }>;
 
+/** How a student qualified for a stage, when they did. */
+type Qualification = { fromRank: number; fromCompetition: { title: string } };
+
 const WITH_PRIZES = { prizeList: { orderBy: { sortOrder: 'asc' } }, _count: { select: { participants: true } } } as const;
 
 /** Rows are not shown to students until published. */
@@ -39,14 +42,16 @@ export class CompetitionsService {
   // ─── Reads ──────────────────────────────────────────────────────────────────
 
   async list(userId: string) {
-    const [rows, user, entries] = await Promise.all([
+    const [rows, user, entries, quals] = await Promise.all([
       this.prisma.competition.findMany({ where: VISIBLE, orderBy: { startsAt: 'asc' }, include: WITH_PRIZES }),
       this.prisma.user.findUniqueOrThrow({ where: { id: userId }, select: { classLevel: true, state: true } }),
       this.prisma.competitionParticipant.findMany({ where: { userId } }),
+      this.prisma.competitionQualification.findMany({ where: { userId }, select: { competitionId: true, fromRank: true, fromCompetition: { select: { title: true } } } }),
     ]);
     await this.sync(rows);
     const mine = new Map(entries.map((e) => [e.competitionId, e]));
-    return rows.map((c) => this.summary(c, user, mine.get(c.id)));
+    const qualified = new Map(quals.map((q) => [q.competitionId, q]));
+    return rows.map((c) => this.summary(c, user, mine.get(c.id), qualified.get(c.id)));
   }
 
   /** Everything the student has entered, newest first, with how it ended. */
@@ -82,14 +87,15 @@ export class CompetitionsService {
 
   async detail(userId: string, id: string) {
     const c = await this.load(id);
-    const [user, entry, completed] = await Promise.all([
+    const [user, entry, completed, qual] = await Promise.all([
       this.prisma.user.findUniqueOrThrow({ where: { id: userId }, select: { classLevel: true, state: true } }),
       this.prisma.competitionParticipant.findUnique({ where: { competitionId_userId: { competitionId: id, userId } } }),
       this.prisma.competitionParticipant.count({ where: { competitionId: id, status: 'COMPLETED' } }),
+      this.qualificationOf(userId, id),
     ]);
     const session = entry ? await this.prisma.quizSession.findUnique({ where: { userId_competitionId: { userId, competitionId: id } } }) : null;
     return {
-      ...this.summary(c, user, entry ?? undefined),
+      ...this.summary(c, user, entry ?? undefined, qual ?? undefined),
       description: c.description,
       completedCount: completed,
       scoring: {
@@ -123,8 +129,9 @@ export class CompetitionsService {
     c: CompetitionRow,
     user: { classLevel: any; state: string | null },
     entry?: { status: string; score: number | null; rank: number | null },
+    qualification?: Qualification,
   ) {
-    const elig = checkEligibility(c, user);
+    const elig = checkEligibility(c, user, !!qualification);
     const titles = c.prizeList.length > 0 ? c.prizeList.map((p) => p.title) : ((c.prizes as string[]) ?? []);
     return {
       id: c.id,
@@ -148,6 +155,9 @@ export class CompetitionsService {
       questionCount: c.questionCount,
       eligible: elig.eligible,
       ineligibleReason: elig.reason ?? null,
+      // Stages: a final may be open only to those who qualified for it.
+      requiresQualification: c.requiresQualification,
+      qualification: qualification ? { fromRank: qualification.fromRank, fromCompetition: qualification.fromCompetition.title } : null,
       myStatus: entry?.status ?? null,
       myScore: entry?.score ?? null,
       myRank: entry?.rank ?? null,
@@ -251,8 +261,16 @@ export class CompetitionsService {
 
   private async assertEligible(userId: string, c: CompetitionRow) {
     const user = await this.prisma.user.findUniqueOrThrow({ where: { id: userId }, select: { classLevel: true, state: true } });
-    const elig = checkEligibility(c, user);
+    const qualified = c.requiresQualification ? !!(await this.qualificationOf(userId, c.id)) : false;
+    const elig = checkEligibility(c, user, qualified);
     if (!elig.eligible) throw new ForbiddenException(elig.reason);
+  }
+
+  private qualificationOf(userId: string, competitionId: string) {
+    return this.prisma.competitionQualification.findUnique({
+      where: { competitionId_userId: { competitionId, userId } },
+      select: { fromRank: true, fromCompetition: { select: { title: true } } },
+    });
   }
 
   // ─── Rankings ───────────────────────────────────────────────────────────────

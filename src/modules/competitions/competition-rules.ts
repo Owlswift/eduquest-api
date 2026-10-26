@@ -43,6 +43,8 @@ export interface EligibilityRule {
   classLevels: ClassLevel[];
   state: string | null;
   region: Region | null;
+  /** Entry is only for students a qualifier advanced (a later stage, e.g. the national final). */
+  requiresQualification?: boolean;
 }
 
 export interface Eligibility {
@@ -51,7 +53,15 @@ export interface Eligibility {
   reason?: string;
 }
 
-export function checkEligibility(c: EligibilityRule, user: { classLevel: ClassLevel; state: string | null }): Eligibility {
+export function checkEligibility(
+  c: EligibilityRule,
+  user: { classLevel: ClassLevel; state: string | null },
+  /** Whether an earlier stage has qualified this student for `c`. */
+  qualified = false,
+): Eligibility {
+  if (c.requiresQualification && !qualified) {
+    return { eligible: false, reason: 'Entry is by qualification. Finish high enough in an earlier round to take part' };
+  }
   if (c.classLevels.length > 0 && !c.classLevels.includes(user.classLevel)) {
     return { eligible: false, reason: `Open to ${c.classLevels.join(', ')} students. You are in ${user.classLevel}` };
   }
@@ -138,4 +148,42 @@ export function prizeRangeProblems(prizes: PrizeRange[]): string[] {
 /** Which prize range a finishing position falls in, if any. */
 export function prizeForPosition<T extends PrizeRange>(prizes: T[], position: number): T | undefined {
   return prizes.find((p) => position >= p.positionFrom && position <= p.positionTo);
+}
+
+/** The top `count` finishers of a ranking, best first. Ranks are already tie-broken, so this is exact. */
+export function qualifiersFrom<T extends { rank: number }>(ranked: T[], count: number): T[] {
+  return [...ranked].sort((a, b) => a.rank - b.rank).slice(0, Math.max(0, count));
+}
+
+export interface StageRule {
+  id: string;
+  status: CompetitionStatus;
+  startsAt: Date;
+  endsAt: Date;
+  nextStageId: string | null;
+  requiresQualification: boolean;
+}
+
+/**
+ * Why `from` cannot send its top finishers to `next`, in words for an admin.
+ * `all` is every competition involved (to spot a loop). Empty = the link is fine.
+ */
+export function stageLinkProblems(from: StageRule, next: StageRule, advanceCount: number | null | undefined, all: StageRule[]): string[] {
+  const problems: string[] = [];
+  if (next.id === from.id) return ['A competition cannot lead into itself'];
+  if (!advanceCount || advanceCount < 1) problems.push('Say how many top finishers advance');
+  if (!next.requiresQualification) problems.push('The next stage must be set to entry by qualification, or anyone could enter it');
+  if (!['DRAFT', 'PUBLISHED'].includes(next.status)) problems.push('The next stage has already started, so it can no longer take qualifiers');
+  if (next.startsAt < from.endsAt) problems.push('The next stage must start after this one ends');
+  // Walk forward from `next`: reaching `from` again would make a loop.
+  const byId = new Map(all.map((c) => [c.id, c]));
+  const seen = new Set<string>();
+  for (let cur: StageRule | undefined = next; cur && !seen.has(cur.id); cur = cur.nextStageId ? byId.get(cur.nextStageId) : undefined) {
+    if (cur.nextStageId === from.id) {
+      problems.push('That would make the stages loop back on themselves');
+      break;
+    }
+    seen.add(cur.id);
+  }
+  return problems;
 }
