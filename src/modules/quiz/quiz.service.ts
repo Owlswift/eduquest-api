@@ -7,6 +7,8 @@ import { PrismaService } from '../../database/prisma.service';
 import { ActivityService } from '../activity/activity.service';
 import { GrantResult, LedgerService } from '../ledger/ledger.service';
 import { AttemptSource, ClassLevel, LedgerCurrency, QuizSessionStatus } from '@prisma/client';
+import { DAILY_REWARDS } from '../daily-challenges/daily.constants';
+import { QUIZ_SESSION_TTL_MS } from './quiz.constants';
 import { AchievementsService } from '../gamification/achievements.service';
 import { levelProgress } from '../gamification/levels';
 import { AttemptsService } from '../progress/attempts.service';
@@ -18,14 +20,17 @@ export const QUIZ_COINS_PER_CORRECT = 10;
  *  also pays at most once per user per (Lagos) week, so replaying the same
  *  questions can't be farmed. */
 export const QUIZ_DAILY_REWARD_CAP = 500;
-/** How long a session may stay open before it can no longer be submitted. */
-export const QUIZ_SESSION_TTL_MS = 3 * 60 * 60 * 1000;
+export { QUIZ_SESSION_TTL_MS };
 
 const LAGOS_OFFSET_MS = 60 * 60 * 1000; // UTC+1, no DST
 
 export interface GradedSession {
   sessionId: string;
   subjectId: string;
+  /** Set when the session was a daily-challenge attempt. */
+  dailyChallengeId?: string | null;
+  /** Answered/correct counts per subject (a daily challenge mixes subjects). */
+  bySubject?: { subjectId: string; answered: number; correct: number }[];
   /** Every question in the session, in issue order. */
   questionIds: string[];
   /** Subset of `questionIds` answered correctly. */
@@ -168,6 +173,7 @@ export class QuizService {
     source: AttemptSource = AttemptSource.QUIZ,
   ): Promise<GradedSession> {
     const session = await this._openSession(userId, sessionId);
+    if (session.dailyChallengeId) source = AttemptSource.DAILY;
 
     const closed = await this.prisma.quizSession.updateMany({
       where: { id: sessionId, userId, status: QuizSessionStatus.OPEN },
@@ -182,9 +188,10 @@ export class QuizService {
 
     const questions = await this.prisma.question.findMany({
       where: { id: { in: session.questionIds } },
-      select: { id: true, correctAnswerId: true },
+      select: { id: true, correctAnswerId: true, subjectId: true },
     });
     const correctById = new Map(questions.map((q) => [q.id, q.correctAnswerId]));
+    const subjectOf = new Map(questions.map((q) => [q.id, q.subjectId]));
 
     const correctIds = session.questionIds.filter((id) => {
       const chosen = locked[id] ?? sent.get(id);
@@ -206,11 +213,54 @@ export class QuizService {
       ),
     ]);
 
+    const tally = new Map<string, { subjectId: string; answered: number; correct: number }>();
+    for (const id of session.questionIds) {
+      const subjectId = subjectOf.get(id) ?? session.subjectId;
+      const row = tally.get(subjectId) ?? { subjectId, answered: 0, correct: 0 };
+      row.answered += 1;
+      if (correctSet.has(id)) row.correct += 1;
+      tally.set(subjectId, row);
+    }
+
     return {
       sessionId,
       subjectId: session.subjectId,
+      dailyChallengeId: session.dailyChallengeId,
+      bySubject: [...tally.values()],
       questionIds: session.questionIds,
       correctIds,
+    };
+  }
+
+  /** Pays a daily challenge's fixed bonus once: a completion bonus, plus a
+   *  perfect-score bonus. Separate ledger keys make each idempotent. */
+  async rewardDailyChallenge(userId: string, graded: GradedSession) {
+    const challengeId = graded.dailyChallengeId!;
+    const perfect = graded.correctIds.length === graded.questionIds.length && graded.questionIds.length > 0;
+    const grants: GrantResult[] = [];
+    await this.prisma.$transaction(async (tx) => {
+      grants.push(
+        await this.ledger.grant(
+          { userId, xp: DAILY_REWARDS.completionXp, coins: DAILY_REWARDS.completionCoins, reason: 'daily_challenge', key: `daily:${userId}:${challengeId}:done`, refType: 'daily_challenge', refId: challengeId },
+          tx,
+        ),
+      );
+      if (perfect) {
+        grants.push(
+          await this.ledger.grant(
+            { userId, xp: DAILY_REWARDS.perfectXp, coins: DAILY_REWARDS.perfectCoins, reason: 'daily_challenge', key: `daily:${userId}:${challengeId}:perfect`, refType: 'daily_challenge', refId: challengeId },
+            tx,
+          ),
+        );
+      }
+    });
+    const levelUp = LedgerService.mergeLevelUps(grants);
+    if (levelUp) this.ledger.announceLevelUp(userId, levelUp);
+    return {
+      earnedXp: grants.reduce((n, g) => n + g.xp, 0),
+      earnedCoins: grants.reduce((n, g) => n + g.coins, 0),
+      levelUp,
+      perfect,
     };
   }
 
@@ -308,26 +358,33 @@ export class QuizService {
     const totalQuestions = graded.questionIds.length;
     const correctAnswers = graded.correctIds.length;
 
-    const { earnedXp, earnedCoins } = await this.rewardQuizCorrects(userId, graded);
-    const subjectId = graded.subjectId;
+    const isDaily = !!graded.dailyChallengeId;
+    let dailyPerfect = false;
+    let earnedXp: number;
+    let earnedCoins: number;
+    if (isDaily) {
+      const paid = await this.rewardDailyChallenge(userId, graded);
+      ({ earnedXp, earnedCoins } = paid);
+      dailyPerfect = paid.perfect;
+    } else {
+      ({ earnedXp, earnedCoins } = await this.rewardQuizCorrects(userId, graded));
+    }
 
-    // Subject-specific accuracy, for Challenge matchmaking - separate
-    // from the global rolling `accuracy` below, since a student can be
-    // strong in one subject and weak in another.
-    await this.prisma.subjectStat.upsert({
-      where: { userId_subjectId: { userId, subjectId } },
-      create: {
-        userId,
-        subjectId,
-        questionsAnswered: totalQuestions,
-        correctAnswers,
-      },
-      update: {
-        questionsAnswered: { increment: totalQuestions },
-        correctAnswers: { increment: correctAnswers },
-        lastActiveAt: new Date(),
-      },
-    });
+    // Subject-specific accuracy, for Challenge matchmaking - separate from
+    // the global rolling `accuracy` below, since a student can be strong in
+    // one subject and weak in another. Counted per question's own subject
+    // (a daily challenge mixes subjects).
+    for (const row of graded.bySubject ?? [{ subjectId: graded.subjectId, answered: totalQuestions, correct: correctAnswers }]) {
+      await this.prisma.subjectStat.upsert({
+        where: { userId_subjectId: { userId, subjectId: row.subjectId } },
+        create: { userId, subjectId: row.subjectId, questionsAnswered: row.answered, correctAnswers: row.correct },
+        update: {
+          questionsAnswered: { increment: row.answered },
+          correctAnswers: { increment: row.correct },
+          lastActiveAt: new Date(),
+        },
+      });
+    }
 
     // Update user stats atomically
     const user = await this.prisma.user.update({
@@ -377,6 +434,7 @@ export class QuizService {
       totalCoins: fresh.coins,
       totalXp: fresh.xp,
       level: levelProgress(fresh.xp),
+      daily: isDaily ? { completed: true, perfect: dailyPerfect } : undefined,
       newAchievements: unlocked.map((a) => ({ key: a.key, name: a.name, description: a.description, icon: a.icon })),
     };
   }

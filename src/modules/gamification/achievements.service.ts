@@ -20,7 +20,7 @@ export class AchievementsService {
 
   /** The verified numbers every achievement is checked against. */
   async stats(userId: string): Promise<AchievementStats> {
-    const [user, correct, quizzes, perfect, won] = await Promise.all([
+    const [user, correct, quizzes, perfect, won, daily, exams] = await Promise.all([
       this.prisma.user.findUnique({
         where: { id: userId },
         select: { questionsAnswered: true, longestStreak: true, level: true, certificates: true },
@@ -36,6 +36,8 @@ export class AchievementsService {
          WHERE "status" = 'COMPLETED'::"ChallengeStatus"
            AND (("challengerId" = ${userId} AND "challengerScore" > "opponentScore")
              OR ("opponentId" = ${userId} AND "opponentScore" > "challengerScore"))`,
+      this.prisma.quizSession.count({ where: { userId, status: 'SUBMITTED', dailyChallengeId: { not: null } } }),
+      this.prisma.examSession.count({ where: { userId, status: 'SUBMITTED' } }),
     ]);
     return {
       quizzes,
@@ -46,6 +48,8 @@ export class AchievementsService {
       level: user?.level ?? 1,
       challengesWon: won[0]?.n ?? 0,
       certificates: user?.certificates ?? 0,
+      dailyChallenges: daily,
+      examsCompleted: exams,
     };
   }
 

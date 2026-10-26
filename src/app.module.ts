@@ -6,6 +6,8 @@ import { PrismaModule } from './database/prisma.module';
 import { LedgerModule } from './modules/ledger/ledger.module';
 import { GamificationModule } from './modules/gamification/gamification.module';
 import { ProgressModule } from './modules/progress/progress.module';
+import { DailyChallengesModule } from './modules/daily-challenges/daily-challenges.module';
+import { ExamsModule } from './modules/exams/exams.module';
 import { HealthModule } from './modules/health/health.module';
 import { AuthModule } from './modules/auth/auth.module';
 import { UsersModule } from './modules/users/users.module';
@@ -33,6 +35,8 @@ import { AdminModule } from './modules/admin/admin.module';
     LedgerModule,
     GamificationModule,
     ProgressModule,
+    DailyChallengesModule,
+    ExamsModule,
     MailerModule,
     PushModule,
     NotificationsModule,

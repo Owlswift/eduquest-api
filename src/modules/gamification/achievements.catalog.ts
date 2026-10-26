@@ -11,7 +11,9 @@ export type AchievementStat =
   | 'longestStreak'
   | 'level'
   | 'challengesWon'
-  | 'certificates';
+  | 'certificates'
+  | 'dailyChallenges'
+  | 'examsCompleted';
 
 export interface AchievementDef {
   key: string;
@@ -39,4 +41,8 @@ export const ACHIEVEMENTS: AchievementDef[] = [
   { key: 'challenge_ace', name: 'Challenge Ace', description: 'Win a 1v1 challenge', icon: 'crossed_swords', stat: 'challengesWon', target: 1, rewardXp: 50, rewardCoins: 20 },
   { key: 'challenge_champion', name: 'Challenge Champion', description: 'Win 10 challenges', icon: 'crossed_swords', stat: 'challengesWon', target: 10, rewardXp: 200, rewardCoins: 100 },
   { key: 'topic_expert', name: 'Topic Expert', description: 'Earn a subject certificate', icon: 'gold_medal', stat: 'certificates', target: 1, rewardXp: 100, rewardCoins: 50 },
+  { key: 'daily_first', name: 'Daily Challenger', description: 'Complete a daily challenge', icon: 'today_target', stat: 'dailyChallenges', target: 1, rewardXp: 30, rewardCoins: 10 },
+  { key: 'daily_devotion', name: 'Daily Devotion', description: 'Complete 7 daily challenges', icon: 'today_target', stat: 'dailyChallenges', target: 7, rewardXp: 150, rewardCoins: 60 },
+  { key: 'exam_ready', name: 'Exam Ready', description: 'Finish an exam simulation', icon: 'school_bag', stat: 'examsCompleted', target: 1, rewardXp: 50, rewardCoins: 20 },
+  { key: 'exam_regular', name: 'Exam Regular', description: 'Finish 5 exam simulations', icon: 'school_bag', stat: 'examsCompleted', target: 5, rewardXp: 200, rewardCoins: 80 },
 ];

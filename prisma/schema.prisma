@@ -68,6 +68,11 @@ enum QuizSessionStatus {
   SUBMITTED
 }
 
+enum ExamStatus {
+  IN_PROGRESS
+  SUBMITTED
+}
+
 enum AttemptSource {
   QUIZ
   STARTER
@@ -135,6 +140,7 @@ model User {
   updatedAt    DateTime   @updatedAt
 
   quizSessions         QuizSession[]
+  examSessions         ExamSession[]
   ledgerEntries        LedgerEntry[]
   questionAttempts     QuestionAttempt[]
   achievements         UserAchievement[]
@@ -232,14 +238,64 @@ model QuizSession {
   status      QuizSessionStatus @default(OPEN)
   /// Number answered correctly; set when the session is graded.
   correctCount Int              @default(0)
+  /// Set when this session is a student's attempt at a daily challenge.
+  dailyChallengeId String?
 
   createdAt   DateTime  @default(now())
   submittedAt DateTime?
 
+  user           User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  dailyChallenge DailyChallenge? @relation(fields: [dailyChallengeId], references: [id], onDelete: SetNull)
+
+  /// One attempt per student per daily challenge (NULLs, i.e. ordinary
+  /// quizzes, never collide).
+  @@unique([userId, dailyChallengeId])
+  @@index([userId, status])
+}
+
+/// The question set every student of a class level gets for one Lagos
+/// calendar day. Created on first request (unique on date + class level),
+/// so there is no scheduler to fail.
+model DailyChallenge {
+  id          String     @id @default(cuid())
+  date        DateTime   @db.Date
+  classLevel  ClassLevel
+  questionIds String[]
+  createdAt   DateTime   @default(now())
+
+  sessions QuizSession[]
+
+  @@unique([date, classLevel])
+}
+
+/// A timed exam simulation. `endsAt` is fixed when it starts and enforced on
+/// the server: answers saved or submitted after it (plus a short grace for
+/// network lag) are ignored. Awards no XP or coins; it is practice for the
+/// real exam (PRODUCT.md section 5.5).
+model ExamSession {
+  id          String     @id @default(cuid())
+  userId      String
+  examType    ExamType
+  subjectId   String
+  questionIds String[]
+  durationSec Int
+  startedAt   DateTime   @default(now())
+  endsAt      DateTime
+  submittedAt DateTime?
+  status      ExamStatus @default(IN_PROGRESS)
+  /// { [questionId]: selectedOptionId }, autosaved while the exam runs.
+  answers     Json       @default("{}")
+  score       Int?
+  /// True when the exam used past questions of the chosen exam body; false
+  /// when there were too few and it fell back to the general bank.
+  pastQuestionsOnly Boolean @default(true)
+
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId, status])
+  @@index([userId, startedAt])
 }
+
 
 /// Auto-awarded once a student's average StudentMastery score in a
 /// subject crosses a threshold across enough topics (see
