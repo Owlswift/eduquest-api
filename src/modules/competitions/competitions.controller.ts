@@ -19,6 +19,13 @@ export class CompetitionsController {
     return this.competitions.list(user.sub);
   }
 
+  // GET /competitions/mine: my competition history (declared before :id)
+  @Get('mine')
+  @ApiOperation({ summary: 'Competitions I entered: result, rank, prize and certificate' })
+  async mine(@CurrentUser() user: any) {
+    return this.competitions.history(user.sub);
+  }
+
   // GET /competitions/:id
   @Get(':id')
   @ApiOperation({ summary: 'Rules, scoring, eligibility, prizes and my entry' })

@@ -49,6 +49,37 @@ export class CompetitionsService {
     return rows.map((c) => this.summary(c, user, mine.get(c.id)));
   }
 
+  /** Everything the student has entered, newest first, with how it ended. */
+  async history(userId: string) {
+    const entries = await this.prisma.competitionParticipant.findMany({
+      where: { userId },
+      orderBy: { joinedAt: 'desc' },
+      include: { competition: { select: { id: true, title: true, type: true, format: true, status: true, startsAt: true, endsAt: true } } },
+    });
+    const ids = entries.map((e) => e.competitionId);
+    const [awards, certs, totals] = await Promise.all([
+      this.prisma.prizeAward.findMany({ where: { userId, competitionId: { in: ids } }, include: { prize: true } }),
+      this.prisma.certificate.findMany({ where: { userId, competitionId: { in: ids } } }),
+      this.prisma.competitionParticipant.groupBy({ by: ['competitionId'], where: { competitionId: { in: ids }, status: 'COMPLETED' }, _count: { _all: true } }),
+    ]);
+    const award = new Map(awards.map((a) => [a.competitionId, a]));
+    const completed = new Map(totals.map((t) => [t.competitionId, t._count._all]));
+    return entries.map((e) => ({
+      competition: { id: e.competition.id, title: e.competition.title, type: e.competition.type, endsAt: e.competition.endsAt },
+      lifecycle: effectiveStatus(e.competition),
+      status: e.status,
+      score: e.score,
+      // Only final once the results are confirmed.
+      rank: e.rank,
+      outOf: completed.get(e.competitionId) ?? 0,
+      disqualifiedReason: e.status === 'DISQUALIFIED' ? e.disqualifiedReason : null,
+      prize: award.has(e.competitionId)
+        ? { id: award.get(e.competitionId)!.id, title: award.get(e.competitionId)!.prize.title, status: award.get(e.competitionId)!.status }
+        : null,
+      certificates: certs.filter((c) => c.competitionId === e.competitionId).map((c) => ({ id: c.id, kind: c.kind, title: c.title, verificationCode: c.verificationCode })),
+    }));
+  }
+
   async detail(userId: string, id: string) {
     const c = await this.load(id);
     const [user, entry, completed] = await Promise.all([

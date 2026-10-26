@@ -13,7 +13,9 @@ export type AchievementStat =
   | 'challengesWon'
   | 'certificates'
   | 'dailyChallenges'
-  | 'examsCompleted';
+  | 'examsCompleted'
+  | 'competitionPodiums'
+  | 'competitionsEntered';
 
 export interface AchievementDef {
   key: string;
@@ -45,4 +47,6 @@ export const ACHIEVEMENTS: AchievementDef[] = [
   { key: 'daily_devotion', name: 'Daily Devotion', description: 'Complete 7 daily challenges', icon: 'today_target', stat: 'dailyChallenges', target: 7, rewardXp: 150, rewardCoins: 60 },
   { key: 'exam_ready', name: 'Exam Ready', description: 'Finish an exam simulation', icon: 'school_bag', stat: 'examsCompleted', target: 1, rewardXp: 50, rewardCoins: 20 },
   { key: 'exam_regular', name: 'Exam Regular', description: 'Finish 5 exam simulations', icon: 'school_bag', stat: 'examsCompleted', target: 5, rewardXp: 200, rewardCoins: 80 },
+  { key: 'first_competition', name: 'Competitor', description: 'Finish your first competition', icon: 'crossed_swords', stat: 'competitionsEntered', target: 1, rewardXp: 50, rewardCoins: 20 },
+  { key: 'top_finisher', name: 'Top Finisher', description: 'Finish in the top three of a competition', icon: 'trophy', stat: 'competitionPodiums', target: 1, rewardXp: 300, rewardCoins: 150 },
 ];

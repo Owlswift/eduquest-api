@@ -20,10 +20,10 @@ export class AchievementsService {
 
   /** The verified numbers every achievement is checked against. */
   async stats(userId: string): Promise<AchievementStats> {
-    const [user, correct, quizzes, perfect, won, daily, exams] = await Promise.all([
+    const [user, correct, quizzes, perfect, won, daily, exams, subjectCerts, podiums, entered] = await Promise.all([
       this.prisma.user.findUnique({
         where: { id: userId },
-        select: { questionsAnswered: true, longestStreak: true, level: true, certificates: true },
+        select: { questionsAnswered: true, longestStreak: true, level: true },
       }),
       this.prisma.subjectStat.aggregate({ where: { userId }, _sum: { correctAnswers: true } }),
       this.prisma.quizSession.count({ where: { userId, status: 'SUBMITTED' } }),
@@ -38,6 +38,10 @@ export class AchievementsService {
              OR ("opponentId" = ${userId} AND "opponentScore" > "challengerScore"))`,
       this.prisma.quizSession.count({ where: { userId, status: 'SUBMITTED', dailyChallengeId: { not: null } } }),
       this.prisma.examSession.count({ where: { userId, status: 'SUBMITTED' } }),
+      // Only mastery certificates: competition certificates are a different achievement.
+      this.prisma.certificate.count({ where: { userId, kind: 'SUBJECT' } }),
+      this.prisma.competitionParticipant.count({ where: { userId, rank: { gte: 1, lte: 3 } } }),
+      this.prisma.competitionParticipant.count({ where: { userId, status: 'COMPLETED' } }),
     ]);
     return {
       quizzes,
@@ -47,7 +51,9 @@ export class AchievementsService {
       longestStreak: user?.longestStreak ?? 0,
       level: user?.level ?? 1,
       challengesWon: won[0]?.n ?? 0,
-      certificates: user?.certificates ?? 0,
+      certificates: subjectCerts,
+      competitionPodiums: podiums,
+      competitionsEntered: entered,
       dailyChallenges: daily,
       examsCompleted: exams,
     };

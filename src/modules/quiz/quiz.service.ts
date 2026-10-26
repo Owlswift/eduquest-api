@@ -389,6 +389,24 @@ export class QuizService {
     return monday.toISOString().slice(0, 10);
   }
 
+  /** Grades a competition sitting that was never submitted (the student left,
+   *  or time ran out) from the answers they locked in before the deadline. Used
+   *  when a competition is validated and finalised. */
+  async settleCompetitionSession(userId: string, sessionId: string) {
+    const graded = await this.gradeAndCloseSession(userId, sessionId, []);
+    if (!graded.competitionId) throw new BadRequestException('Not a competition session');
+    return this.sittings.record({
+      userId,
+      competitionId: graded.competitionId,
+      startedAt: graded.startedAt!,
+      deadline: graded.deadline!,
+      total: graded.questionIds.length,
+      correct: graded.correctIds.length,
+      answered: graded.answeredCount ?? 0,
+      answers: graded.answers ?? {},
+    });
+  }
+
   // ─── POST /quiz/submit ──────────────────────────────────────────────────────
 
   async submitQuizResults(

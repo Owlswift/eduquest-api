@@ -1,6 +1,6 @@
 import { Body, Controller, DefaultValuePipe, Delete, Get, Param, ParseIntPipe, Patch, Post, Query, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
-import { ClassLevel, ExamType, QuestionStatus, UserRole } from '@prisma/client';
+import { ClassLevel, ExamType, PrizeAwardStatus, QuestionStatus, UserRole } from '@prisma/client';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { Roles } from '../../common/decorators/roles.decorator';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
@@ -8,7 +8,9 @@ import { RolesGuard } from '../../common/guards/roles.guard';
 import { AdminCompetitionsService } from './admin-competitions.service';
 import { AdminQuestionsService } from './admin-questions.service';
 import { CreateCompetitionDto, UpdateCompetitionDto } from './dto/competition.dto';
-import { CloseCompetitionDto } from './dto/competition-actions.dto';
+import { CloseAwardDto, CloseCompetitionDto, FulfilAwardDto, ReasonDto } from './dto/competition-actions.dto';
+import { AdminCompetitionResultsService } from './admin-competition-results.service';
+import { PrizesService } from '../competitions/prizes.service';
 import { CreateQuestionDto, SetStatusDto, UpdateQuestionDto } from './dto/question.dto';
 
 @ApiTags('admin')
@@ -20,6 +22,8 @@ export class AdminContentController {
   constructor(
     private questions: AdminQuestionsService,
     private competitions: AdminCompetitionsService,
+    private results: AdminCompetitionResultsService,
+    private prizes: PrizesService,
   ) {}
 
   // ─── Question bank ──────────────────────────────────────────────────────────
@@ -107,5 +111,73 @@ export class AdminContentController {
   @ApiOperation({ summary: 'Delete a draft, or a published competition nobody has joined' })
   deleteCompetition(@CurrentUser() admin: any, @Param('id') id: string) {
     return this.competitions.remove(admin.sub, id);
+  }
+
+  // ─── Results: validation, finalising, prizes ────────────────────────────────
+
+  @Get('competitions/:id/entries')
+  @ApiOperation({ summary: 'Every entry with score, time, review flags and identical-sheet counts' })
+  entries(@Param('id') id: string) {
+    return this.results.entries(id);
+  }
+
+  @Post('competitions/:id/validate')
+  @ApiOperation({ summary: 'Grade unsubmitted sittings and flag identical answer sheets (closed competitions)' })
+  validate(@CurrentUser() admin: any, @Param('id') id: string) {
+    return this.results.validate(admin.sub, id);
+  }
+
+  @Post('competitions/:id/entries/:userId/disqualify')
+  disqualify(@CurrentUser() admin: any, @Param('id') id: string, @Param('userId') userId: string, @Body() dto: ReasonDto) {
+    return this.results.disqualify(admin.sub, id, userId, dto.reason);
+  }
+
+  @Post('competitions/:id/entries/:userId/reinstate')
+  reinstate(@CurrentUser() admin: any, @Param('id') id: string, @Param('userId') userId: string) {
+    return this.results.reinstate(admin.sub, id, userId);
+  }
+
+  @Post('competitions/:id/finalise')
+  @ApiOperation({ summary: 'Confirm results: final ranks, prize awards and certificates (once)' })
+  finalise(@CurrentUser() admin: any, @Param('id') id: string) {
+    return this.results.finalise(admin.sub, id);
+  }
+
+  @Post('competitions/:id/archive')
+  archive(@CurrentUser() admin: any, @Param('id') id: string) {
+    return this.results.archive(admin.sub, id);
+  }
+
+  @Get('prize-awards')
+  @ApiOperation({ summary: 'Prize awards with winner contact and claim details; filter by status or overdue claims' })
+  prizeAwards(
+    @Query('status') status?: PrizeAwardStatus,
+    @Query('competitionId') competitionId?: string,
+    @Query('overdue') overdue?: string,
+  ) {
+    return this.prizes.adminList({ status, competitionId, overdue: overdue === 'true' });
+  }
+
+  @Post('prize-awards/:id/verify')
+  verifyAward(@CurrentUser() admin: any, @Param('id') id: string) {
+    return this.prizes.verify(admin.sub, id);
+  }
+
+  @Post('prize-awards/:id/fulfil')
+  @ApiOperation({ summary: 'Mark a verified prize delivered (a coin prize is paid now, once)' })
+  fulfilAward(@CurrentUser() admin: any, @Param('id') id: string, @Body() dto: FulfilAwardDto) {
+    return this.prizes.fulfil(admin.sub, id, dto.note);
+  }
+
+  @Post('prize-awards/:id/forfeit')
+  @ApiOperation({ summary: 'Unclaimed or unreachable: forfeit and (by default) pass to the next place' })
+  forfeitAward(@CurrentUser() admin: any, @Param('id') id: string, @Body() dto: CloseAwardDto) {
+    return this.prizes.forfeit(admin.sub, id, dto.reason, dto.promote ?? true);
+  }
+
+  @Post('prize-awards/:id/reject')
+  @ApiOperation({ summary: 'Verification failed: reject and (by default) pass to the next place' })
+  rejectAward(@CurrentUser() admin: any, @Param('id') id: string, @Body() dto: CloseAwardDto) {
+    return this.prizes.reject(admin.sub, id, dto.reason, dto.promote ?? true);
   }
 }

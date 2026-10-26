@@ -85,14 +85,18 @@ describe('CertificatesService', () => {
     it('maps certificates to the response shape, newest first', async () => {
       const createdAt = new Date('2026-06-01');
       prisma.certificate.findMany.mockResolvedValue([
-        { id: 'c1', subjectId: 'math', subjectName: 'Mathematics', createdAt },
+        { id: 'c1', kind: 'SUBJECT', subjectId: 'math', subjectName: 'Mathematics', title: null, competitionId: null, rank: null, verificationCode: 'EQ-AAAAA-BBBBB', createdAt },
+        { id: 'c2', kind: 'WINNER', subjectId: null, subjectName: 'June Challenge', title: 'Runner-up', competitionId: 'comp1', rank: 2, verificationCode: 'EQ-CCCCC-DDDDD', createdAt },
       ]);
 
       const result = await service.list('u1');
 
-      expect(result).toEqual([
-        { id: 'c1', subjectId: 'math', subjectName: 'Mathematics', earnedAt: createdAt },
-      ]);
+      // Older clients read id, subjectId, subjectName and earnedAt; the rest is new.
+      expect(result[0]).toEqual({
+        id: 'c1', subjectId: 'math', subjectName: 'Mathematics', earnedAt: createdAt,
+        kind: 'SUBJECT', title: 'Mathematics mastery', competitionId: null, rank: null, verificationCode: 'EQ-AAAAA-BBBBB',
+      });
+      expect(result[1]).toMatchObject({ kind: 'WINNER', title: 'Runner-up', rank: 2, subjectId: null, competitionId: 'comp1' });
     });
   });
 });

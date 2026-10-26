@@ -127,6 +127,24 @@ enum PrizeKind {
   OTHER
 }
 
+/// The life of a prize won in a competition. A winner claims it (giving delivery
+/// details), an admin verifies the win and then fulfils it; if it is never
+/// claimed, or verification fails, it is forfeited and can pass to the next place.
+enum PrizeAwardStatus {
+  AWAITING_CLAIM
+  CLAIMED
+  VERIFIED
+  FULFILLED
+  FORFEITED
+  REJECTED
+}
+
+enum CertificateKind {
+  SUBJECT
+  PARTICIPATION
+  WINNER
+}
+
 enum QuestionStatus {
   DRAFT
   PUBLISHED
@@ -210,6 +228,7 @@ model User {
   ledgerEntries        LedgerEntry[]
   questionAttempts     QuestionAttempt[]
   auditLogs            AdminAuditLog[]
+  prizeAwards          PrizeAward[]
   achievements         UserAchievement[]
   tutorSessions        TutorSession[]
   studentMastery       StudentMastery[]
@@ -393,16 +412,62 @@ model ExamSession {
 /// subject crosses a threshold across enough topics (see
 /// CertificatesService) - not admin-issued, no manual grant path yet.
 model Certificate {
-  id          String   @id @default(cuid())
+  id          String          @id @default(cuid())
   userId      String
-  subjectId   String
+  kind        CertificateKind @default(SUBJECT)
+  /// Set for SUBJECT certificates.
+  subjectId   String?
+  /// What the certificate is for, as printed: a subject name or the competition title.
   subjectName String
-  createdAt   DateTime @default(now())
+  /// The headline, e.g. "Lagos State Champion" or "Participant". Null for older subject certificates.
+  title       String?
+  competitionId String?
+  /// Finishing position for WINNER certificates.
+  rank        Int?
+  /// Public code anyone can check at GET /certificates/verify/:code.
+  verificationCode String     @unique
+  createdAt   DateTime        @default(now())
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([userId, subjectId])
+  @@unique([userId, competitionId, kind])
   @@index([userId])
+}
+
+/// A prize a student won in a competition, from announcement to delivery.
+model PrizeAward {
+  id            String           @id @default(cuid())
+  competitionId String
+  prizeId       String
+  userId        String
+  /// Finishing position that earned it.
+  rank          Int
+  status        PrizeAwardStatus @default(AWAITING_CLAIM)
+  /// After this the prize can be forfeited and passed on.
+  claimDeadline DateTime
+  claimedAt     DateTime?
+  /// What the winner supplied: contact phone, delivery note, guardian contact.
+  claimDetails  Json?
+  verifiedAt    DateTime?
+  verifiedById  String?
+  fulfilledAt   DateTime?
+  fulfilmentNote String?
+  /// Why it was forfeited or rejected.
+  closedReason  String?
+  /// Set when this award was created by passing on a forfeited one.
+  promotedFromId String?
+  createdAt     DateTime         @default(now())
+  updatedAt     DateTime         @default(now()) @updatedAt
+
+  competition Competition      @relation(fields: [competitionId], references: [id], onDelete: Cascade)
+  prize       CompetitionPrize @relation(fields: [prizeId], references: [id], onDelete: Cascade)
+  user        User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([competitionId, userId])
+  @@index([userId])
+  @@index([competitionId, status])
+  @@index([status, claimDeadline])
 }
 
 /// An in-app notification - the bell icon's feed. Created on meaningful
@@ -527,6 +592,7 @@ model Competition {
 
   participants CompetitionParticipant[]
   prizeList    CompetitionPrize[]
+  prizeAwards  PrizeAward[]
   sessions     QuizSession[]
 
   @@index([startsAt, endsAt])
@@ -546,6 +612,7 @@ model CompetitionPrize {
   sortOrder     Int       @default(0)
 
   competition Competition @relation(fields: [competitionId], references: [id], onDelete: Cascade)
+  awards      PrizeAward[]
 
   @@index([competitionId])
 }
