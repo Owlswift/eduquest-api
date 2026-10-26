@@ -9,6 +9,8 @@ import { ProgressModule } from './modules/progress/progress.module';
 import { DailyChallengesModule } from './modules/daily-challenges/daily-challenges.module';
 import { ExamsModule } from './modules/exams/exams.module';
 import { MetaModule } from './modules/meta/meta.module';
+import { CacheModule } from './common/cache/cache.module';
+import { LeaderboardsModule } from './modules/leaderboards/leaderboards.module';
 import { HealthModule } from './modules/health/health.module';
 import { AuthModule } from './modules/auth/auth.module';
 import { UsersModule } from './modules/users/users.module';
@@ -39,6 +41,8 @@ import { AdminModule } from './modules/admin/admin.module';
     DailyChallengesModule,
     ExamsModule,
     MetaModule,
+    CacheModule,
+    LeaderboardsModule,
     MailerModule,
     PushModule,
     NotificationsModule,

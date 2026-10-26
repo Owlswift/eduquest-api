@@ -1,4 +1,5 @@
 import { Controller, Get, Patch, Post, Delete, Body, Query, UseGuards, HttpCode, HttpStatus } from '@nestjs/common';
+import { LeaderboardsService } from '../leaderboards/leaderboards.service';
 import { UsersService } from './users.service';
 import { ActivityService } from '../activity/activity.service';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
@@ -13,6 +14,7 @@ export class UsersController {
   constructor(
     private users: UsersService,
     private activity: ActivityService,
+    private leaderboards: LeaderboardsService,
   ) {}
 
   // GET /users/me
@@ -68,7 +70,7 @@ export class UsersController {
     @CurrentUser() user: any,
     @Query('period') period?: 'all' | 'weekly' | 'monthly',
   ) {
-    return this.users.getLeaderboard(user.sub, 20, period ?? 'all');
+    return this.leaderboards.legacy(user.sub, period ?? 'all', 20);
   }
 
   // GET /users/search?q=ola&subjectId=math — find a student to challenge,

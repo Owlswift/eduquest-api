@@ -246,6 +246,11 @@ model User {
   challengesSent       Challenge[]              @relation("ChallengesSent")
   challengesReceived   Challenge[]              @relation("ChallengesReceived")
   subjectStats         SubjectStat[]
+
+  // Leaderboards rank students by XP, overall and within a state or class.
+  @@index([xp])
+  @@index([state, xp])
+  @@index([classLevel, xp])
 }
 
 /// Append-only record of every XP / coin change. `User.xp` and
@@ -315,6 +320,7 @@ model QuestionAttempt {
   @@index([userId, subjectId, createdAt])
   @@index([userId, subjectId, topic])
   @@index([questionId])
+  @@index([subjectId, createdAt])
 }
 
 /// An achievement a student has unlocked. The catalogue (names, criteria,
@@ -703,6 +709,7 @@ model DailyActivity {
 
   @@unique([userId, date])
   @@index([userId, date])
+  @@index([date])
 }
 
 model BlacklistedToken {
@@ -958,6 +965,7 @@ model SubjectStat {
 
   @@unique([userId, subjectId])
   @@index([subjectId])
+  @@index([subjectId, correctAnswers])
 }
 
 model AnswerOption {
