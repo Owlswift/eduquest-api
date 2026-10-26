@@ -96,6 +96,11 @@ export class CacheService implements OnModuleDestroy {
   }
 
   async onModuleDestroy() {
-    await this.redis?.quit().catch(() => undefined);
+    if (!this.redis) return;
+    // QUIT waits for the server, which never answers when Redis is down:
+    // only ask nicely if we are connected, otherwise just drop the socket and
+    // stop the reconnect timer so shutdown cannot hang.
+    if (this.redis.status === 'ready') await this.redis.quit().catch(() => this.redis?.disconnect());
+    else this.redis.disconnect();
   }
 }

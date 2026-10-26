@@ -11,6 +11,7 @@ import { ExamsModule } from './modules/exams/exams.module';
 import { MetaModule } from './modules/meta/meta.module';
 import { CacheModule } from './common/cache/cache.module';
 import { LeaderboardsModule } from './modules/leaderboards/leaderboards.module';
+import { JobsModule } from './modules/jobs/jobs.module';
 import { HealthModule } from './modules/health/health.module';
 import { AuthModule } from './modules/auth/auth.module';
 import { UsersModule } from './modules/users/users.module';
@@ -43,6 +44,7 @@ import { AdminModule } from './modules/admin/admin.module';
     MetaModule,
     CacheModule,
     LeaderboardsModule,
+    JobsModule,
     MailerModule,
     PushModule,
     NotificationsModule,

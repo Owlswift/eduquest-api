@@ -233,6 +233,7 @@ model User {
   questionAttempts     QuestionAttempt[]
   auditLogs            AdminAuditLog[]
   prizeAwards          PrizeAward[]
+  notificationPreference NotificationPreference?
   achievements         UserAchievement[]
   tutorSessions        TutorSession[]
   studentMastery       StudentMastery[]
@@ -491,12 +492,33 @@ model Notification {
   body      String
   data      Json?
   read      Boolean  @default(false)
+  /// Set for scheduled notifications (e.g. `streak_reminder:<user>:2026-06-15`):
+  /// a second attempt with the same key is dropped, so a retried or duplicated
+  /// job can never message a student twice.
+  dedupeKey String?  @unique
   createdAt DateTime @default(now())
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId, createdAt])
   @@index([userId, read])
+}
+
+/// What a student wants to hear about. Everything is on by default. Messages
+/// about money and prizes (reward and prize status) are always delivered.
+model NotificationPreference {
+  userId         String   @id
+  /// Streak reminders and "today's challenge is ready".
+  studyReminders Boolean  @default(true)
+  /// Competition opening, closing soon and results.
+  competitions   Boolean  @default(true)
+  /// Badges, levels and certificates.
+  achievements   Boolean  @default(true)
+  /// Allow push notifications at all; the in-app feed is unaffected.
+  push           Boolean  @default(true)
+  updatedAt      DateTime @default(now()) @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 }
 
 /// A push token registered by one install of the app. A user can have

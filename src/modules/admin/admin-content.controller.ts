@@ -12,6 +12,8 @@ import { CloseAwardDto, CloseCompetitionDto, FulfilAwardDto, ReasonDto } from '.
 import { AdminCompetitionResultsService } from './admin-competition-results.service';
 import { PrizesService } from '../competitions/prizes.service';
 import { AdminRewardsService } from './admin-rewards.service';
+import { JobsService } from '../jobs/jobs.service';
+import { NotFoundException } from '@nestjs/common';
 import { CreateRewardDto, UpdateRewardDto } from './dto/reward.dto';
 import { CreateQuestionDto, SetStatusDto, UpdateQuestionDto } from './dto/question.dto';
 
@@ -27,6 +29,7 @@ export class AdminContentController {
     private results: AdminCompetitionResultsService,
     private prizes: PrizesService,
     private rewards: AdminRewardsService,
+    private jobs: JobsService,
   ) {}
 
   // ─── Question bank ──────────────────────────────────────────────────────────
@@ -207,5 +210,21 @@ export class AdminContentController {
   @ApiOperation({ summary: 'Delete a reward nobody redeemed (otherwise switch it off)' })
   deleteReward(@CurrentUser() admin: any, @Param('id') id: string) {
     return this.rewards.remove(admin.sub, id);
+  }
+
+  // ─── Scheduled jobs ─────────────────────────────────────────────────────────
+
+  @Get('jobs')
+  @ApiOperation({ summary: 'Scheduled tasks and whether the scheduler is running (needs REDIS_URL)' })
+  listJobs() {
+    return this.jobs.describe();
+  }
+
+  @Post('jobs/:name/run')
+  @ApiOperation({ summary: 'Run a scheduled task now. Safe to repeat: each message is sent at most once' })
+  async runJob(@Param('name') name: string) {
+    const out = await this.jobs.runNow(name);
+    if (!out) throw new NotFoundException(`No such task: ${name}`);
+    return out;
   }
 }
