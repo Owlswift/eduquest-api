@@ -2,6 +2,8 @@ import {
   Controller,
   Get,
   Patch,
+  Post,
+  Delete,
   Param,
   Query,
   Body,
@@ -17,6 +19,7 @@ import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../../common/guards/roles.guard';
 import { Roles } from '../../common/decorators/roles.decorator';
 import { UpdateRoleDto } from './dto/update-role.dto';
+import { ReasonDto } from './dto/competition-actions.dto';
 
 @ApiTags('admin')
 @ApiBearerAuth('access-token')
@@ -49,6 +52,20 @@ export class AdminController {
   @ApiOperation({ summary: 'Full detail for one user' })
   async getUser(@Param('id') id: string) {
     return this.admin.getUser(id);
+  }
+
+  // POST /admin/users/:id/guardian-consent/withdraw
+  @Post('users/:id/guardian-consent/withdraw')
+  @ApiOperation({ summary: "Withdraw a parent or guardian's agreement at their request" })
+  async withdrawGuardian(@CurrentUser() admin: any, @Param('id') id: string, @Body() dto: ReasonDto) {
+    return this.admin.withdrawGuardianConsent(admin.sub, id, dto.reason);
+  }
+
+  // DELETE /admin/users/:id
+  @Delete('users/:id')
+  @ApiOperation({ summary: 'Erase a student account and everything it owns (for example on a parent or guardian request)' })
+  async erase(@CurrentUser() admin: any, @Param('id') id: string, @Body() dto: ReasonDto) {
+    return this.admin.eraseStudent(admin.sub, id, dto.reason);
   }
 
   // PATCH /admin/users/:id/role

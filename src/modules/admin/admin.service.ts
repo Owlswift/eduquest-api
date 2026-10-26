@@ -1,5 +1,6 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { UserRole } from '@prisma/client';
+import { isMinor } from '../../common/safeguarding';
 import { AuditService } from './audit.service';
 import { PrismaService } from '../../database/prisma.service';
 
@@ -108,10 +109,16 @@ export class AdminService {
         accuracy: true,
         timeSpent: true,
         createdAt: true,
+        age: true,
+        guardianName: true,
+        guardianPhone: true,
+        guardianConsentAt: true,
+        policyAcceptedVersion: true,
+        policyAcceptedAt: true,
       },
     });
     if (!user) throw new NotFoundException('User not found');
-    return user;
+    return { ...user, isMinor: isMinor(user.age) };
   }
 
   // ─── PATCH /admin/users/:id/role ────────────────────────────────────────────
@@ -138,5 +145,31 @@ export class AdminService {
       after: { role },
     });
     return updated;
+  }
+
+  /** A parent or guardian asked for their agreement to be withdrawn: the student can no longer enter prize competitions or claim prizes. */
+  async withdrawGuardianConsent(adminId: string, userId: string, reason: string) {
+    const r = await this.prisma.user.updateMany({
+      where: { id: userId, guardianConsentAt: { not: null } },
+      data: { guardianConsentAt: null, guardianConsentVersion: null },
+    });
+    if (r.count === 0) throw new NotFoundException('That student has no guardian agreement on file');
+    await this.audit.log({ adminId, action: 'user.guardian_consent_withdrawn', entityType: 'user', entityId: userId, summary: `Guardian agreement withdrawn: ${reason}` });
+    return { withdrawn: true };
+  }
+
+  /**
+   * Erases an account (for example on a parent or guardian's request). Everything the student owns goes with
+   * it. An administrator cannot be erased here, nor can you erase yourself. The reason is kept in the audit log,
+   * which holds no personal details beyond the id.
+   */
+  async eraseStudent(adminId: string, userId: string, reason: string) {
+    if (userId === adminId) throw new BadRequestException('You cannot erase your own account here');
+    const u = await this.prisma.user.findUnique({ where: { id: userId }, select: { role: true, username: true } });
+    if (!u) throw new NotFoundException('User not found');
+    if (u.role !== 'STUDENT') throw new BadRequestException('Only student accounts can be erased here');
+    await this.audit.log({ adminId, action: 'user.erase', entityType: 'user', entityId: userId, summary: `Erased a student account: ${reason}` });
+    await this.prisma.user.delete({ where: { id: userId } });
+    return { erased: true };
   }
 }

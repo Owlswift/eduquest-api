@@ -247,6 +247,15 @@ model User {
   refreshTokens        RefreshToken[]
   /// Access tokens issued before this moment are refused (set when the password changes).
   tokensValidFrom      DateTime?
+  /// Safeguarding: a parent or guardian's agreement, needed for under-18s to enter prize competitions and claim prizes.
+  guardianName         String?
+  guardianPhone        String?
+  guardianConsentAt    DateTime?
+  /// The policy version the guardian agreed to.
+  guardianConsentVersion String?
+  /// The privacy and safeguarding policy version this person accepted.
+  policyAcceptedVersion String?
+  policyAcceptedAt     DateTime?
   rewardRedemptions    RewardRedemption[]
   passwordResetOtps    PasswordResetOtp[]
   notifications        Notification[]

@@ -29,6 +29,7 @@ import { PushModule } from './modules/push/push.module';
 import { NotificationsModule } from './modules/notifications/notifications.module';
 import { CertificatesModule } from './modules/certificates/certificates.module';
 import { AdminModule } from './modules/admin/admin.module';
+import { LegalModule } from './modules/legal/legal.module';
 import { SponsorsModule } from './modules/sponsors/sponsors.module';
 
 @Module({
@@ -57,6 +58,7 @@ import { SponsorsModule } from './modules/sponsors/sponsors.module';
     CertificatesModule,
     AdminModule,
     SponsorsModule,
+    LegalModule,
     ActivityModule,
     HealthModule,
     AuthModule,

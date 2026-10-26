@@ -1,5 +1,6 @@
 import { createHash } from 'crypto';
 import { ClassLevel, CompetitionStatus, CompetitionType, Region } from '@prisma/client';
+import { GUARDIAN_CONSENT_REASON } from '../../common/safeguarding';
 import { canonicalState } from '../../common/geo/nigerian-states';
 import { REGION_LABEL, regionOfState } from '../../common/geo/regions';
 
@@ -58,6 +59,8 @@ export function checkEligibility(
   user: { classLevel: ClassLevel; state: string | null },
   /** Whether an earlier stage has qualified this student for `c`. */
   qualified = false,
+  /** True when a parent or guardian's agreement is needed for `c` (a child, a prize competition) and is not on file. */
+  guardianConsentMissing = false,
 ): Eligibility {
   if (c.requiresQualification && !qualified) {
     return { eligible: false, reason: 'Entry is by qualification. Finish high enough in an earlier round to take part' };
@@ -76,6 +79,9 @@ export function checkEligibility(
     if (regionOfState(user.state) !== c.region) {
       return { eligible: false, reason: `Open to the ${REGION_LABEL[c.region]} zone. ${user.state} is in a different zone` };
     }
+  }
+  if (guardianConsentMissing) {
+    return { eligible: false, reason: GUARDIAN_CONSENT_REASON };
   }
   return { eligible: true };
 }

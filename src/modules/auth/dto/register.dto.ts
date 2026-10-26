@@ -1,5 +1,5 @@
 import { Transform } from 'class-transformer';
-import { IsArray, IsEmail, IsIn, IsOptional, IsString, MinLength } from 'class-validator';
+import { IsArray, IsBoolean, IsEmail, IsIn, IsOptional, IsString, MaxLength, MinLength } from 'class-validator';
 import { canonicalState, NIGERIAN_STATES } from '../../../common/geo/nigerian-states';
 
 export class RegisterDto {
@@ -39,4 +39,25 @@ export class RegisterDto {
   @IsArray()
   @IsString({ each: true })
   interests?: string[];
+
+  /** The privacy and safeguarding policy version the person agreed to (from GET /legal/policy). */
+  @IsOptional()
+  @IsString()
+  @MaxLength(60)
+  acceptedPolicyVersion?: string;
+
+  /** A parent or guardian's details and agreement, which a child needs for prize competitions. Can also be added later. */
+  @IsOptional()
+  @IsString()
+  @MaxLength(100)
+  guardianName?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(20)
+  guardianPhone?: string;
+
+  @IsOptional()
+  @IsBoolean()
+  guardianConsent?: boolean;
 }

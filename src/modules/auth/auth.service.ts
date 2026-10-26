@@ -6,6 +6,8 @@ import {
   BadRequestException,
 } from '@nestjs/common';
 import { PrismaService } from '../../database/prisma.service';
+import { normalisePhone } from '../../common/phone';
+import { loadPolicy } from '../../common/safeguarding';
 import { RefreshTokensService } from './refresh-tokens.service';
 import * as argon2 from 'argon2';
 import { JwtService } from '@nestjs/jwt';
@@ -35,6 +37,7 @@ export class AuthService {
     const hash = await argon2.hash(dto.password);
     const baseUsername = dto.email.split('@')[0].toLowerCase().trim();
     const username = await this._uniqueUsername(baseUsername);
+    const consent = this.registrationConsent(dto);
 
     try {
       const user = await this.prisma.user.create({
@@ -49,6 +52,7 @@ export class AuthService {
           institution: dto.institution?.toLowerCase().trim() || null,
           age: dto.age?.toLowerCase().trim() || null,
           interests: dto.interests ? JSON.stringify(dto.interests) : null,
+          ...consent,
         },
       });
 
@@ -71,6 +75,27 @@ export class AuthService {
       // Re-throw other errors
       throw error;
     }
+  }
+
+  /**
+   * What registration records about the privacy and safeguarding policy: that they accepted it, and a parent or
+   * guardian's agreement when one was given. A guardian's agreement needs a name and a valid phone number, and
+   * is only recorded if `guardianConsent` is true.
+   */
+  private registrationConsent(dto: { acceptedPolicyVersion?: string; guardianName?: string; guardianPhone?: string; guardianConsent?: boolean }) {
+    const policy = loadPolicy();
+    const out: Record<string, unknown> = {};
+    if (dto.acceptedPolicyVersion !== undefined) {
+      if (dto.acceptedPolicyVersion !== policy.version) throw new BadRequestException(`That is not the current policy version (${policy.version}). Fetch it again`);
+      out.policyAcceptedVersion = policy.version;
+      out.policyAcceptedAt = new Date();
+    }
+    if (dto.guardianConsent) {
+      const phone = dto.guardianPhone ? normalisePhone(dto.guardianPhone) : null;
+      if (!dto.guardianName?.trim() || !phone) throw new BadRequestException("A parent or guardian's agreement needs their name and a valid Nigerian phone number");
+      Object.assign(out, { guardianName: dto.guardianName.trim(), guardianPhone: phone, guardianConsentAt: new Date(), guardianConsentVersion: policy.version });
+    }
+    return out;
   }
 
   // ─── Email/Password Login ───────────────────────────────────────────────────

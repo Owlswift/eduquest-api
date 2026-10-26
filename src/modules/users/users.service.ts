@@ -1,5 +1,6 @@
 import { Injectable, ConflictException, BadRequestException, UnauthorizedException } from '@nestjs/common';
 import { hashRefreshToken } from '../auth/refresh-tokens.service';
+import { publicName } from '../../common/names';
 import * as argon2 from 'argon2';
 import { PrismaService } from '../../database/prisma.service';
 import { ActivityService } from '../activity/activity.service';
@@ -375,11 +376,11 @@ export class UsersService {
           { fullName: { contains: query, mode: 'insensitive' } },
         ],
       },
-      select: { id: true, username: true, fullName: true, avatarUrl: true, classLevel: true },
+      select: { id: true, fullName: true, classLevel: true },
       take: 15,
       orderBy: { username: 'asc' },
     });
-    if (users.length === 0) return users;
+    if (users.length === 0) return [];
 
     let alreadyOpenWith = new Set<string>();
     if (subjectId) {
@@ -406,7 +407,9 @@ export class UsersService {
       } else if (alreadyOpenWith.has(u.id)) {
         ineligibleReason = 'You already have an open challenge with them for this subject';
       }
-      return { ...u, eligible: ineligibleReason === null, ineligibleReason };
+      // What one student learns about another: first name and surname initial, class, nothing else.
+      // (No username, which is derived from the email address, and no photo.) See the safeguarding policy.
+      return { id: u.id, fullName: publicName(u.fullName), classLevel: u.classLevel, eligible: ineligibleReason === null, ineligibleReason };
     });
   }
 }

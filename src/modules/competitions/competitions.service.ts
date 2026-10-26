@@ -3,6 +3,7 @@ import { AttemptSource, Prisma, QuizSessionStatus } from '@prisma/client';
 import { lagosDate } from '../../common/time/lagos';
 import { publicName } from '../../common/names';
 import { PrismaService } from '../../database/prisma.service';
+import { guardianConsentMissing } from '../../common/safeguarding';
 import { publicSponsor, SPONSOR_SELECT } from '../sponsors/logo';
 import { NotificationsService } from '../notifications/notifications.service';
 import {
@@ -46,7 +47,7 @@ export class CompetitionsService {
   async list(userId: string) {
     const [rows, user, entries, quals] = await Promise.all([
       this.prisma.competition.findMany({ where: VISIBLE, orderBy: { startsAt: 'asc' }, include: WITH_PRIZES }),
-      this.prisma.user.findUniqueOrThrow({ where: { id: userId }, select: { classLevel: true, state: true } }),
+      this.prisma.user.findUniqueOrThrow({ where: { id: userId }, select: { classLevel: true, state: true, age: true, guardianConsentAt: true } }),
       this.prisma.competitionParticipant.findMany({ where: { userId } }),
       this.prisma.competitionQualification.findMany({ where: { userId }, select: { competitionId: true, fromRank: true, fromCompetition: { select: { title: true } } } }),
     ]);
@@ -90,7 +91,7 @@ export class CompetitionsService {
   async detail(userId: string, id: string) {
     const c = await this.load(id);
     const [user, entry, completed, qual] = await Promise.all([
-      this.prisma.user.findUniqueOrThrow({ where: { id: userId }, select: { classLevel: true, state: true } }),
+      this.prisma.user.findUniqueOrThrow({ where: { id: userId }, select: { classLevel: true, state: true, age: true, guardianConsentAt: true } }),
       this.prisma.competitionParticipant.findUnique({ where: { competitionId_userId: { competitionId: id, userId } } }),
       this.prisma.competitionParticipant.count({ where: { competitionId: id, status: 'COMPLETED' } }),
       this.qualificationOf(userId, id),
@@ -146,11 +147,11 @@ export class CompetitionsService {
 
   private summary(
     c: CompetitionRow,
-    user: { classLevel: any; state: string | null },
+    user: { classLevel: any; state: string | null; age?: string | null; guardianConsentAt?: Date | null },
     entry?: { status: string; score: number | null; rank: number | null },
     qualification?: Qualification,
   ) {
-    const elig = checkEligibility(c, user, !!qualification);
+    const elig = checkEligibility(c, user, !!qualification, c.prizeList.length > 0 && guardianConsentMissing(user));
     const titles = c.prizeList.length > 0 ? c.prizeList.map((p) => p.title) : ((c.prizes as string[]) ?? []);
     return {
       id: c.id,
@@ -285,9 +286,9 @@ export class CompetitionsService {
   }
 
   private async assertEligible(userId: string, c: CompetitionRow) {
-    const user = await this.prisma.user.findUniqueOrThrow({ where: { id: userId }, select: { classLevel: true, state: true } });
+    const user = await this.prisma.user.findUniqueOrThrow({ where: { id: userId }, select: { classLevel: true, state: true, age: true, guardianConsentAt: true } });
     const qualified = c.requiresQualification ? !!(await this.qualificationOf(userId, c.id)) : false;
-    const elig = checkEligibility(c, user, qualified);
+    const elig = checkEligibility(c, user, qualified, c.prizeList.length > 0 && guardianConsentMissing(user));
     if (!elig.eligible) throw new ForbiddenException(elig.reason);
   }
 

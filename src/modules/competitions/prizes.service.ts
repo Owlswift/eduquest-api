@@ -1,4 +1,6 @@
-import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
+import { normalisePhone } from '../../common/phone';
+import { guardianConsentMissing } from '../../common/safeguarding';
+import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { PrizeAwardStatus, PrizeKind, Prisma } from '@prisma/client';
 import { PrismaService } from '../../database/prisma.service';
 import { LedgerService } from '../ledger/ledger.service';
@@ -18,12 +20,7 @@ export const CLAIM_REQUIREMENTS: Record<PrizeKind, { contactPhone: boolean; guar
   OTHER: { contactPhone: true, guardianPhone: false, note: false },
 };
 
-/** A Nigerian mobile number: 0803..., +234803... (spaces and dashes allowed). */
-export function normalisePhone(input: string): string | null {
-  const digits = input.replace(/[\s-]/g, '');
-  const m = /^(?:\+?234|0)([789][01]\d{8})$/.exec(digits);
-  return m ? `+234${m[1]}` : null;
-}
+export { normalisePhone } from '../../common/phone';
 
 /** Statuses an award can still be closed from. */
 const OPEN: PrizeAwardStatus[] = ['AWAITING_CLAIM', 'CLAIMED', 'VERIFIED'];
@@ -68,6 +65,11 @@ export class PrizesService {
     if (a.claimDeadline.getTime() < Date.now()) throw new ConflictException('The claim period for this prize has ended');
 
     const need = CLAIM_REQUIREMENTS[a.prize.kind];
+    // A prize that has to be delivered to a child needs a parent or guardian's agreement on file first.
+    if (need.contactPhone) {
+      const me = await this.prisma.user.findUnique({ where: { id: userId }, select: { age: true, guardianConsentAt: true } });
+      if (me && guardianConsentMissing(me)) throw new ForbiddenException('A parent or guardian needs to agree before this prize can be delivered. Add their details in your profile');
+    }
     const details: Record<string, string> = {};
     if (need.contactPhone) {
       const p = dto.contactPhone ? normalisePhone(dto.contactPhone) : null;

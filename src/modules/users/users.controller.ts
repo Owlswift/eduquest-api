@@ -1,4 +1,4 @@
-import { Controller, Get, Patch, Post, Delete, Body, Query, UseGuards, HttpCode, HttpStatus } from '@nestjs/common';
+import { Controller, Get, Patch, Post, Put, Delete, Body, Query, UseGuards, HttpCode, HttpStatus } from '@nestjs/common';
 import { LeaderboardsService } from '../leaderboards/leaderboards.service';
 import { UsersService } from './users.service';
 import { ActivityService } from '../activity/activity.service';
@@ -6,6 +6,8 @@ import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { UpdateProfileDto } from './dto/update-profile.dto';
 import { CompleteChallengeDto } from './dto/complete-challenge.dto';
+import { SafeguardingService } from './safeguarding.service';
+import { AcceptPolicyDto, GuardianConsentDto } from './dto/safeguarding.dto';
 import { ChangePasswordDto } from './dto/change-password.dto';
 
 @Controller('users')
@@ -15,6 +17,7 @@ export class UsersController {
     private users: UsersService,
     private activity: ActivityService,
     private leaderboards: LeaderboardsService,
+    private safeguarding: SafeguardingService,
   ) {}
 
   // GET /users/me
@@ -44,6 +47,31 @@ export class UsersController {
       accuracy: userData.accuracy,
       timeSpent: userData.timeSpent,
     };
+  }
+
+  // GET /users/me/safeguarding
+  @Get('me/safeguarding')
+  async safeguardingStatus(@CurrentUser() user: any) {
+    return this.safeguarding.status(user.sub);
+  }
+
+  // PUT /users/me/guardian - a parent or guardian's agreement
+  @Put('me/guardian')
+  async setGuardian(@CurrentUser() user: any, @Body() dto: GuardianConsentDto) {
+    return this.safeguarding.setGuardian(user.sub, dto);
+  }
+
+  // POST /users/me/accept-policy
+  @Post('me/accept-policy')
+  @HttpCode(HttpStatus.OK)
+  async acceptPolicy(@CurrentUser() user: any, @Body() dto: AcceptPolicyDto) {
+    return this.safeguarding.acceptPolicy(user.sub, dto.version);
+  }
+
+  // GET /users/me/export - a copy of everything held about the student
+  @Get('me/export')
+  async exportData(@CurrentUser() user: any) {
+    return this.safeguarding.exportData(user.sub);
   }
 
   // DELETE /users/me

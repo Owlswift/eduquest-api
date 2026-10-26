@@ -31,6 +31,8 @@ describe('PrizesService', () => {
       prizeAward: { findFirst: jest.fn(), findUnique: jest.fn(), updateMany: jest.fn().mockResolvedValue({ count: 1 }), findMany: jest.fn(), aggregate: jest.fn(), create: jest.fn() },
       competition: { findUniqueOrThrow: jest.fn().mockResolvedValue({ claimDeadlineDays: 14, title: 'June' }) },
       competitionParticipant: { findFirst: jest.fn() },
+      // An adult by default; the safeguarding tests below change it.
+      user: { findUnique: jest.fn().mockResolvedValue({ age: '19', guardianConsentAt: null }) },
       $transaction: jest.fn(),
     };
     prisma.$transaction.mockImplementation((cb: any) => cb(prisma));
@@ -45,6 +47,18 @@ describe('PrizesService', () => {
       expect(CLAIM_REQUIREMENTS.SCHOLARSHIP.guardianPhone).toBe(true);
       expect(CLAIM_REQUIREMENTS.AIRTIME.guardianPhone).toBe(false);
       expect(CLAIM_REQUIREMENTS.COINS.contactPhone).toBe(false);
+    });
+
+    it('will not deliver a prize to a child whose parent or guardian has not agreed, but lets coins through', async () => {
+      prisma.user.findUnique.mockResolvedValue({ age: '16', guardianConsentAt: null });
+      prisma.prizeAward.findFirst.mockResolvedValue(award('DATA'));
+      await expect(service.claim('u1', 'a1', { contactPhone: '08031234567' })).rejects.toThrow(/parent or guardian needs to agree/);
+      expect(prisma.prizeAward.updateMany).not.toHaveBeenCalled();
+      prisma.prizeAward.findFirst.mockResolvedValue(award('COINS')); // nothing is delivered, so nothing to agree to
+      await expect(service.claim('u1', 'a1', {})).resolves.toEqual({ claimed: true, status: 'CLAIMED' });
+      prisma.user.findUnique.mockResolvedValue({ age: '16', guardianConsentAt: new Date() });
+      prisma.prizeAward.findFirst.mockResolvedValue(award('DATA'));
+      await expect(service.claim('u1', 'a1', { contactPhone: '08031234567' })).resolves.toEqual({ claimed: true, status: 'CLAIMED' });
     });
 
     it('lets a coin prize be claimed with nothing', async () => {

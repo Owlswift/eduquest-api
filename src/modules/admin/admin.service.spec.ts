@@ -102,7 +102,12 @@ describe('AdminService', () => {
     it('returns full detail for an existing user', async () => {
       prisma.user.findUnique.mockResolvedValue({ id: 'u1', fullName: 'ola law' });
       const result = await service.getUser('u1');
-      expect(result).toEqual({ id: 'u1', fullName: 'ola law' });
+      expect(result).toEqual({ id: 'u1', fullName: 'ola law', isMinor: true }); // no age on file counts as a child
+    });
+
+    it('says whether the student is a child, from their age', async () => {
+      prisma.user.findUnique.mockResolvedValue({ id: 'u1', age: '19' });
+      expect((await service.getUser('u1')).isMinor).toBe(false);
     });
 
     it('throws for an unknown user', async () => {

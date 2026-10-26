@@ -42,7 +42,7 @@ d('sponsors (real database)', () => {
 
   const makeUser = async (over: Record<string, unknown> = {}) => {
     const id = `${tag}-u${++n}`;
-    await prisma.user.create({ data: { id, fullName: `Stu Dent${n}`, username: id, email: `${id}@t.test`, classLevel: 'SS2', state: 'Lagos', ...over } });
+    await prisma.user.create({ data: { id, fullName: `Stu Dent${n}`, username: id, email: `${id}@t.test`, classLevel: 'SS2', age: '19', state: 'Lagos', ...over } });
     userIds.push(id);
     return id;
   };

@@ -17,7 +17,7 @@
     "test:watch": "jest --watch",
     "test:cov": "jest --coverage",
     "test:debug": "node --inspect-brk -r tsconfig-paths/register -r ts-node/register node_modules/.bin/jest --runInBand",
-    "test:e2e": "jest --config ./test/jest-e2e.json --runInBand test/integrity test/progression test/learning test/admin test/competitions test/results test/rewards test/leaderboards test/notifications test/jobs-redis test/cache-redis test/atomic test/scheduler test/certificate-pdf test/stages test/league test/sponsors test/refresh-tokens test/throttler-redis",
+    "test:e2e": "jest --config ./test/jest-e2e.json --runInBand test/integrity test/progression test/learning test/admin test/competitions test/results test/rewards test/leaderboards test/notifications test/jobs-redis test/cache-redis test/atomic test/scheduler test/certificate-pdf test/stages test/league test/sponsors test/safeguarding test/refresh-tokens test/throttler-redis",
     "prisma:seed": "ts-node --compiler-options '{\"module\":\"CommonJS\"}' prisma/seed.ts",
     "prisma:import-questions": "ts-node --compiler-options '{\"module\":\"CommonJS\"}' prisma/import-questions.ts"
   },

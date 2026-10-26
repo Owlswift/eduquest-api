@@ -354,9 +354,7 @@ describe('UsersService.searchStudents', () => {
     expect(result).toEqual([
       {
         id: 'bola',
-        username: 'bola',
-        fullName: 'Bola Ade',
-        avatarUrl: null,
+        fullName: 'Bola A.',
         classLevel: 'SS3',
         eligible: false,
         ineligibleReason: 'In SS3, not your class level',
@@ -390,12 +388,20 @@ describe('UsersService.searchStudents', () => {
     const result = await service.searchStudents('me', 'bola');
 
     expect(result).toEqual([
-      {
-        id: 'bola', username: 'bola', fullName: 'Bola Ade', avatarUrl: null, classLevel: 'SS1',
-        eligible: true, ineligibleReason: null,
-      },
+      { id: 'bola', fullName: 'Bola A.', classLevel: 'SS1', eligible: true, ineligibleReason: null },
     ]);
     expect(prisma.challenge.findMany).not.toHaveBeenCalled();
+  });
+
+  it('tells a student only the first name and surname initial of others: no username, photo or full name', async () => {
+    prisma.user.findUnique.mockResolvedValue({ classLevel: 'SS1' });
+    prisma.user.findMany.mockResolvedValue([{ id: 'bola', username: 'bola.ade2008', fullName: 'bola olawale ade', avatarUrl: 'https://photo', classLevel: 'SS1' }]);
+    const [r] = await service.searchStudents('me', 'bola');
+    expect(Object.keys(r).sort()).toEqual(['classLevel', 'eligible', 'fullName', 'id', 'ineligibleReason']);
+    expect(r.fullName).toBe('Bola A.');
+    expect(JSON.stringify(r)).not.toMatch(/olawale|2008|photo/);
+    // And the query itself never asks the database for them.
+    expect(prisma.user.findMany.mock.calls[0][0].select).toEqual({ id: true, fullName: true, classLevel: true });
   });
 });
 
