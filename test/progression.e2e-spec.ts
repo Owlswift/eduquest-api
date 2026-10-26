@@ -9,6 +9,7 @@ import { AchievementsService } from '../src/modules/gamification/achievements.se
 import { GamificationService } from '../src/modules/gamification/gamification.service';
 import { LedgerService } from '../src/modules/ledger/ledger.service';
 import { AttemptsService } from '../src/modules/progress/attempts.service';
+import { CompetitionSittingsService } from '../src/modules/competitions/competition-sittings.service';
 import { QuizService } from '../src/modules/quiz/quiz.service';
 import { UsersService } from '../src/modules/users/users.service';
 
@@ -73,7 +74,7 @@ d('progression (real database)', () => {
     attempts = new AttemptsService(prisma);
     achievements = new AchievementsService(prisma, ledger, { notify } as any);
     new GamificationService(ledger, { notify } as any, achievements).onModuleInit();
-    quiz = new QuizService(prisma, activity, ledger, attempts, achievements);
+    quiz = new QuizService(prisma, activity, ledger, attempts, achievements, new CompetitionSittingsService(prisma, ledger));
     users = new UsersService(prisma, activity, { notify } as any, ledger, quiz, achievements);
     await prisma.subject.create({ data: { id: subjectId, name: tag, icon: 'i', color: '#000' } });
   });

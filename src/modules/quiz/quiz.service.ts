@@ -11,6 +11,8 @@ import { DAILY_REWARDS } from '../daily-challenges/daily.constants';
 import { QUIZ_SESSION_TTL_MS } from './quiz.constants';
 import { AchievementsService } from '../gamification/achievements.service';
 import { levelProgress } from '../gamification/levels';
+import { CompetitionSittingsService } from '../competitions/competition-sittings.service';
+import { SITTING_GRACE_SEC } from '../competitions/competition-rules';
 import { AttemptsService } from '../progress/attempts.service';
 
 /** XP and coins paid per correct answer. */
@@ -29,6 +31,13 @@ export interface GradedSession {
   subjectId: string;
   /** Set when the session was a daily-challenge attempt. */
   dailyChallengeId?: string | null;
+  /** Set when the session was a sitting of a competition. */
+  competitionId?: string | null;
+  /** For a competition sitting: when it began, when it had to end, and what was answered. */
+  startedAt?: Date;
+  deadline?: Date;
+  answeredCount?: number;
+  answers?: Record<string, string>;
   /** Answered/correct counts per subject (a daily challenge mixes subjects). */
   bySubject?: { subjectId: string; answered: number; correct: number }[];
   /** Every question in the session, in issue order. */
@@ -45,6 +54,7 @@ export class QuizService {
     private ledger: LedgerService,
     private attempts: AttemptsService,
     private achievements: AchievementsService,
+    private sittings: CompetitionSittingsService,
   ) {}
 
   // ─── GET /quiz/questions ────────────────────────────────────────────────────
@@ -131,6 +141,10 @@ export class QuizService {
     if (!session.questionIds.includes(questionId)) {
       throw new BadRequestException('Question is not part of this quiz session');
     }
+    const deadline = session.competitionId ? await this._competitionDeadline(session) : null;
+    if (deadline && Date.now() > deadline.getTime()) {
+      throw new BadRequestException('Time is up for this competition');
+    }
 
     // Conditional write: only succeeds while this question is unanswered.
     await this.prisma.$executeRaw`
@@ -146,6 +160,11 @@ export class QuizService {
       select: { answers: true },
     });
     const locked = (fresh.answers as Record<string, string>)[questionId] ?? selectedOptionId;
+
+    // In a competition every entrant sits the same questions, so telling one
+    // student the answer would let them pass it on. Only the lock is confirmed;
+    // the answers are shown after the competition closes.
+    if (session.competitionId) return { locked: true as const };
 
     const question = await this.prisma.question.findUnique({
       where: { id: questionId },
@@ -174,6 +193,12 @@ export class QuizService {
   ): Promise<GradedSession> {
     const session = await this._openSession(userId, sessionId);
     if (session.dailyChallengeId) source = AttemptSource.DAILY;
+    if (session.competitionId) source = AttemptSource.COMPETITION;
+    const now = new Date();
+    const deadline = session.competitionId ? await this._competitionDeadline(session) : undefined;
+    // Past the deadline (plus a little for network lag) only answers locked
+    // in time count; whatever the client sends now is ignored.
+    const bodyAllowed = !deadline || now.getTime() <= deadline.getTime() + SITTING_GRACE_SEC * 1000;
 
     const closed = await this.prisma.quizSession.updateMany({
       where: { id: sessionId, userId, status: QuizSessionStatus.OPEN },
@@ -184,7 +209,7 @@ export class QuizService {
     }
 
     const locked = session.answers as Record<string, string>;
-    const sent = new Map(submitted.map((a) => [a.questionId, a.selectedOptionId]));
+    const sent = new Map((bodyAllowed ? submitted : []).map((a) => [a.questionId, a.selectedOptionId]));
 
     const questions = await this.prisma.question.findMany({
       where: { id: { in: session.questionIds } },
@@ -222,10 +247,21 @@ export class QuizService {
       tally.set(subjectId, row);
     }
 
+    const chosenAll: Record<string, string> = {};
+    for (const id of session.questionIds) {
+      const chosen = locked[id] ?? sent.get(id);
+      if (chosen) chosenAll[id] = chosen;
+    }
+
     return {
       sessionId,
       subjectId: session.subjectId,
       dailyChallengeId: session.dailyChallengeId,
+      competitionId: session.competitionId,
+      startedAt: session.createdAt,
+      deadline,
+      answeredCount: Object.keys(chosenAll).length,
+      answers: chosenAll,
       bySubject: [...tally.values()],
       questionIds: session.questionIds,
       correctIds,
@@ -317,10 +353,22 @@ export class QuizService {
     if (session.status !== QuizSessionStatus.OPEN) {
       throw new BadRequestException('This quiz was already submitted');
     }
-    if (Date.now() - session.createdAt.getTime() > QUIZ_SESSION_TTL_MS) {
+    // A competition sitting is timed by its own deadline, and a late
+    // submission is still graded (from the answers locked in time).
+    if (!session.competitionId && Date.now() - session.createdAt.getTime() > QUIZ_SESSION_TTL_MS) {
       throw new BadRequestException('This quiz session has expired');
     }
     return session;
+  }
+
+  /** When a competition sitting must end: its own limit or the competition's end, whichever is first. */
+  private async _competitionDeadline(session: { competitionId: string | null; expiresAt: Date | null; createdAt: Date }) {
+    const c = await this.prisma.competition.findUniqueOrThrow({
+      where: { id: session.competitionId! },
+      select: { endsAt: true },
+    });
+    const own = session.expiresAt ?? c.endsAt;
+    return own < c.endsAt ? own : c.endsAt;
   }
 
   /** Instant at which the current Lagos calendar day began. */
@@ -362,7 +410,23 @@ export class QuizService {
     let dailyPerfect = false;
     let earnedXp: number;
     let earnedCoins: number;
-    if (isDaily) {
+    let competition: Awaited<ReturnType<CompetitionSittingsService['record']>> | undefined;
+    if (graded.competitionId) {
+      // A competition's score is its own: no per-question quiz rewards, just
+      // the sitting's result and the competition's fixed participation reward.
+      competition = await this.sittings.record({
+        userId,
+        competitionId: graded.competitionId,
+        startedAt: graded.startedAt!,
+        deadline: graded.deadline!,
+        total: totalQuestions,
+        correct: correctAnswers,
+        answered: graded.answeredCount ?? 0,
+        answers: graded.answers ?? {},
+      });
+      earnedXp = competition.participation.xp;
+      earnedCoins = competition.participation.coins;
+    } else if (isDaily) {
       const paid = await this.rewardDailyChallenge(userId, graded);
       ({ earnedXp, earnedCoins } = paid);
       dailyPerfect = paid.perfect;
@@ -435,6 +499,9 @@ export class QuizService {
       totalXp: fresh.xp,
       level: levelProgress(fresh.xp),
       daily: isDaily ? { completed: true, perfect: dailyPerfect } : undefined,
+      competition: competition
+        ? { id: graded.competitionId, score: competition.score, correct: competition.correct, wrong: competition.wrong, timeTakenSec: competition.timeTakenSec, rank: competition.rank }
+        : undefined,
       newAchievements: unlocked.map((a) => ({ key: a.key, name: a.name, description: a.description, icon: a.icon })),
     };
   }

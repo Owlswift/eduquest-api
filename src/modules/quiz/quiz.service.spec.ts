@@ -12,6 +12,7 @@ describe('QuizService', () => {
       updateMany: jest.Mock;
       update: jest.Mock;
     };
+    competition: { findUniqueOrThrow: jest.Mock };
     user: { update: jest.Mock; findUnique: jest.Mock; findUniqueOrThrow: jest.Mock; count: jest.Mock };
     subjectStat: { upsert: jest.Mock };
     $executeRaw: jest.Mock;
@@ -20,6 +21,7 @@ describe('QuizService', () => {
   let ledger: { grant: jest.Mock; sumSince: jest.Mock };
   let attempts: { record: jest.Mock };
   let achievements: { evaluate: jest.Mock };
+  let sittings: { record: jest.Mock };
   let service: QuizService;
 
   const openSession = (over: Record<string, unknown> = {}) => ({
@@ -35,6 +37,7 @@ describe('QuizService', () => {
 
   beforeEach(() => {
     prisma = {
+      competition: { findUniqueOrThrow: jest.fn() },
       subject: { findUnique: jest.fn() },
       question: { findMany: jest.fn(), findUnique: jest.fn() },
       quizSession: {
@@ -52,7 +55,8 @@ describe('QuizService', () => {
     ledger = { grant: jest.fn(), sumSince: jest.fn().mockResolvedValue(0) };
     attempts = { record: jest.fn().mockResolvedValue(0) };
     achievements = { evaluate: jest.fn().mockResolvedValue([]) };
-    service = new QuizService(prisma as any, activity as any, ledger as any, attempts as any, achievements as any);
+    sittings = { record: jest.fn() };
+    service = new QuizService(prisma as any, activity as any, ledger as any, attempts as any, achievements as any, sittings as any);
   });
 
   describe('getRandomQuestions', () => {
@@ -154,6 +158,89 @@ describe('QuizService', () => {
       await expect(service.checkAnswer('u1', 's1', 'q1', 'a')).rejects.toBeInstanceOf(
         BadRequestException,
       );
+    });
+  });
+
+  describe('competition sessions', () => {
+    const comp = (over: Record<string, unknown> = {}) =>
+      openSession({ competitionId: 'c1', expiresAt: new Date(Date.now() + 600_000), ...over });
+
+    beforeEach(() => {
+      prisma.competition.findUniqueOrThrow.mockResolvedValue({ endsAt: new Date(Date.now() + 3_600_000) });
+      prisma.quizSession.updateMany.mockResolvedValue({ count: 1 });
+      prisma.question.findMany.mockResolvedValue([
+        { id: 'q1', correctAnswerId: 'a', subjectId: 'math' },
+        { id: 'q2', correctAnswerId: 'b', subjectId: 'math' },
+        { id: 'q3', correctAnswerId: 'c', subjectId: 'math' },
+      ]);
+    });
+
+    it('locks an answer but never says whether it was right', async () => {
+      prisma.quizSession.findFirst.mockResolvedValue(comp());
+      prisma.quizSession.findUniqueOrThrow.mockResolvedValue({ answers: { q1: 'a' } });
+
+      const res = await service.checkAnswer('u1', 's1', 'q1', 'a');
+
+      expect(res).toEqual({ locked: true });
+      expect(prisma.question.findUnique).not.toHaveBeenCalled(); // the key is never even read
+    });
+
+    it('refuses to lock an answer after the deadline', async () => {
+      prisma.quizSession.findFirst.mockResolvedValue(comp({ expiresAt: new Date(Date.now() - 1000) }));
+      await expect(service.checkAnswer('u1', 's1', 'q1', 'a')).rejects.toThrow(/Time is up/);
+      expect(prisma.$executeRaw).not.toHaveBeenCalled();
+    });
+
+    it('uses the competition end when it comes before the student limit', async () => {
+      prisma.quizSession.findFirst.mockResolvedValue(comp());
+      prisma.competition.findUniqueOrThrow.mockResolvedValue({ endsAt: new Date(Date.now() - 1000) }); // closed early
+      await expect(service.checkAnswer('u1', 's1', 'q1', 'a')).rejects.toThrow(/Time is up/);
+    });
+
+    it('grades a late submission only from the answers locked in time', async () => {
+      prisma.quizSession.findFirst.mockResolvedValue(comp({ expiresAt: new Date(Date.now() - 120_000), answers: { q1: 'a' } }));
+
+      const graded = await service.gradeAndCloseSession('u1', 's1', [
+        { questionId: 'q2', selectedOptionId: 'b' }, // sent too late: ignored
+        { questionId: 'q3', selectedOptionId: 'c' },
+      ]);
+
+      expect(graded.correctIds).toEqual(['q1']);
+      expect(graded.answeredCount).toBe(1);
+      expect(graded.competitionId).toBe('c1');
+      expect(attempts.record).toHaveBeenCalledWith('u1', 'COMPETITION', 's1', expect.any(Array));
+    });
+
+    it('counts answers sent within the grace period, and reports what was answered', async () => {
+      prisma.quizSession.findFirst.mockResolvedValue(comp({ expiresAt: new Date(Date.now() - 5000) })); // 5s late
+      const graded = await service.gradeAndCloseSession('u1', 's1', [
+        { questionId: 'q1', selectedOptionId: 'a' },
+        { questionId: 'q2', selectedOptionId: '' }, // blank: not an answer
+      ]);
+      expect(graded.correctIds).toEqual(['q1']);
+      expect(graded.answeredCount).toBe(1);
+      expect(graded.answers).toEqual({ q1: 'a' });
+    });
+
+    it('records the sitting instead of paying quiz rewards', async () => {
+      prisma.quizSession.findFirst.mockResolvedValue(comp());
+      sittings.record.mockResolvedValue({ score: 7, correct: 2, wrong: 1, timeTakenSec: 90, rank: 3, participation: { xp: 10, coins: 5 }, recorded: true });
+      prisma.user.update.mockResolvedValue({ id: 'u1', coins: 5, xp: 10, questionsAnswered: 3, state: null });
+      prisma.user.findUnique.mockResolvedValue({ accuracy: 0, questionsAnswered: 0 });
+      prisma.user.findUniqueOrThrow.mockResolvedValue({ coins: 5, xp: 10 });
+      prisma.user.count.mockResolvedValue(0);
+
+      const res = await service.submitQuizResults('u1', {
+        sessionId: 's1',
+        answers: [{ questionId: 'q1', selectedOptionId: 'a' }, { questionId: 'q2', selectedOptionId: 'b' }, { questionId: 'q3', selectedOptionId: 'x' }],
+        timeTaken: 5,
+      });
+
+      expect(sittings.record).toHaveBeenCalledWith(expect.objectContaining({ userId: 'u1', competitionId: 'c1', total: 3, correct: 2, answered: 3 }));
+      expect(ledger.grant).not.toHaveBeenCalled(); // no per-question XP or coins
+      expect(res.competition).toEqual({ id: 'c1', score: 7, correct: 2, wrong: 1, timeTakenSec: 90, rank: 3 });
+      expect(res.earnedXp).toBe(10);
+      expect(res.earnedCoins).toBe(5);
     });
   });
 

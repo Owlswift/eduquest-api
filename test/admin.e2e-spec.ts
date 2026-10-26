@@ -7,13 +7,13 @@
 import { ConflictException } from '@nestjs/common';
 import { PrismaService } from '../src/database/prisma.service';
 import { ActivityService } from '../src/modules/activity/activity.service';
-import { AdminCompetitionsService } from '../src/modules/admin/admin-competitions.service';
 import { AdminQuestionsService } from '../src/modules/admin/admin-questions.service';
 import { AuditService } from '../src/modules/admin/audit.service';
 import { DailyChallengesService } from '../src/modules/daily-challenges/daily-challenges.service';
 import { ExamsService } from '../src/modules/exams/exams.service';
 import { LedgerService } from '../src/modules/ledger/ledger.service';
 import { AttemptsService } from '../src/modules/progress/attempts.service';
+import { CompetitionSittingsService } from '../src/modules/competitions/competition-sittings.service';
 import { QuizService } from '../src/modules/quiz/quiz.service';
 
 const url = process.env.TEST_DATABASE_URL;
@@ -22,7 +22,6 @@ const d = url ? describe : describe.skip;
 d('admin tools (real database)', () => {
   let prisma: PrismaService;
   let admin: AdminQuestionsService;
-  let competitions: AdminCompetitionsService;
   let quiz: QuizService;
   let daily: DailyChallengesService;
   let exams: ExamsService;
@@ -55,8 +54,7 @@ d('admin tools (real database)', () => {
     const achievements = { evaluate: async () => [] } as any;
     const audit = new AuditService(prisma);
     admin = new AdminQuestionsService(prisma, audit);
-    competitions = new AdminCompetitionsService(prisma, audit);
-    quiz = new QuizService(prisma, activity, ledger, attempts, achievements);
+    quiz = new QuizService(prisma, activity, ledger, attempts, achievements, new CompetitionSittingsService(prisma, ledger));
     daily = new DailyChallengesService(prisma);
     exams = new ExamsService(prisma, activity, attempts, achievements);
     await prisma.dailyChallenge.deleteMany({});
@@ -66,7 +64,6 @@ d('admin tools (real database)', () => {
   });
 
   afterAll(async () => {
-    await prisma.competition.deleteMany({ where: { title: { startsWith: tag } } });
     await prisma.adminAuditLog.deleteMany({ where: { adminId } });
     await prisma.user.deleteMany({ where: { id: { in: userIds } } });
     await prisma.dailyChallenge.deleteMany({});
@@ -189,38 +186,6 @@ d('admin tools (real database)', () => {
       expect(drafts.items.every((i) => i.status === 'DRAFT')).toBe(true);
       const hit = await admin.list({ subjectId, q: 'editable', page: 1, pageSize: 10 });
       expect(hit.items.some((i) => i.questionText === 'Editable question')).toBe(true);
-    });
-  });
-
-  describe('competitions', () => {
-    const day = 86_400_000;
-    const make = (title: string, startDays: number, endDays: number) =>
-      competitions.create(adminId, {
-        title: `${tag} ${title}`, subtitle: 'sub', prizes: ['1GB data'],
-        startsAt: new Date(Date.now() + startDays * day).toISOString(),
-        endsAt: new Date(Date.now() + endDays * day).toISOString(),
-      });
-
-    it('creates, lists with participants, locks dates after the start, and protects entries', async () => {
-      const upcoming = await make('upcoming', 2, 9);
-      expect(upcoming).toMatchObject({ status: 'upcoming', datesLocked: false, participants: 0 });
-      await competitions.update(adminId, upcoming.id, { startsAt: new Date(Date.now() + 3 * day).toISOString(), endsAt: new Date(Date.now() + 10 * day).toISOString() });
-
-      const live = await make('live', 2, 9);
-      await prisma.competition.update({ where: { id: live.id }, data: { startsAt: new Date(Date.now() - day) } }); // it has now started
-      await expect(competitions.update(adminId, live.id, { endsAt: new Date(Date.now() + 30 * day).toISOString() })).rejects.toBeInstanceOf(ConflictException);
-      const renamed = await competitions.update(adminId, live.id, { title: `${tag} live renamed`, prizes: ['Tablet'] });
-      expect(renamed).toMatchObject({ status: 'ongoing', datesLocked: true, prizes: ['Tablet'] });
-
-      const u = await makeUser();
-      await prisma.competitionParticipant.create({ data: { competitionId: live.id, userId: u, xpAtJoin: 0 } });
-      await expect(competitions.remove(adminId, live.id)).rejects.toThrow(/1 students/);
-      await expect(competitions.remove(adminId, upcoming.id)).resolves.toEqual({ deleted: true });
-
-      const listed = (await competitions.list()).find((c) => c.id === live.id);
-      expect(listed?.participants).toBe(1);
-      const history = (await competitions.get(live.id)).history.map((h) => h.action);
-      expect(history).toEqual(['competition.update', 'competition.create']);
     });
   });
 });

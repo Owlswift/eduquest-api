@@ -8,6 +8,7 @@ import { RolesGuard } from '../../common/guards/roles.guard';
 import { AdminCompetitionsService } from './admin-competitions.service';
 import { AdminQuestionsService } from './admin-questions.service';
 import { CreateCompetitionDto, UpdateCompetitionDto } from './dto/competition.dto';
+import { CloseCompetitionDto } from './dto/competition-actions.dto';
 import { CreateQuestionDto, SetStatusDto, UpdateQuestionDto } from './dto/question.dto';
 
 @ApiTags('admin')
@@ -90,8 +91,20 @@ export class AdminContentController {
     return this.competitions.update(admin.sub, id, dto);
   }
 
+  @Post('competitions/:id/publish')
+  @ApiOperation({ summary: 'Freeze the rules and pick the questions. A published competition opens at its start date' })
+  publishCompetition(@CurrentUser() admin: any, @Param('id') id: string) {
+    return this.competitions.publish(admin.sub, id);
+  }
+
+  @Post('competitions/:id/close')
+  @ApiOperation({ summary: 'End a running competition now (needs a reason)' })
+  closeCompetition(@CurrentUser() admin: any, @Param('id') id: string, @Body() dto: CloseCompetitionDto) {
+    return this.competitions.closeNow(admin.sub, id, dto.reason);
+  }
+
   @Delete('competitions/:id')
-  @ApiOperation({ summary: 'Delete a competition nobody has joined' })
+  @ApiOperation({ summary: 'Delete a draft, or a published competition nobody has joined' })
   deleteCompetition(@CurrentUser() admin: any, @Param('id') id: string) {
     return this.competitions.remove(admin.sub, id);
   }

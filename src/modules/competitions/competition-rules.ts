@@ -1,0 +1,141 @@
+import { createHash } from 'crypto';
+import { ClassLevel, CompetitionStatus, CompetitionType, Region } from '@prisma/client';
+import { canonicalState } from '../../common/geo/nigerian-states';
+import { REGION_LABEL, regionOfState } from '../../common/geo/regions';
+
+/**
+ * The rules of a competition as pure functions, so fairness can be tested
+ * without a database (PRODUCT.md section 6).
+ */
+
+/** Seconds after a deadline in which a late request still counts (network lag). */
+export const SITTING_GRACE_SEC = 30;
+
+export interface TimedCompetition {
+  status: CompetitionStatus;
+  startsAt: Date;
+  endsAt: Date;
+}
+
+/**
+ * The status a competition has right now. DRAFT, FINALISED and ARCHIVED are
+ * set by an admin; PUBLISHED, ACTIVE and CLOSED follow the clock, so a
+ * competition opens and closes on time even if nothing was running.
+ */
+export function effectiveStatus(c: TimedCompetition, now: Date = new Date()): CompetitionStatus {
+  if (c.status === 'PUBLISHED' || c.status === 'ACTIVE') {
+    if (now >= c.endsAt) return 'CLOSED';
+    if (now >= c.startsAt) return 'ACTIVE';
+    return 'PUBLISHED';
+  }
+  return c.status;
+}
+
+/** The three-way status older clients understand. */
+export function legacyStatus(c: { startsAt: Date; endsAt: Date }, now: Date = new Date()): 'upcoming' | 'ongoing' | 'ended' {
+  if (now < c.startsAt) return 'upcoming';
+  if (now > c.endsAt) return 'ended';
+  return 'ongoing';
+}
+
+export interface EligibilityRule {
+  type: CompetitionType;
+  classLevels: ClassLevel[];
+  state: string | null;
+  region: Region | null;
+}
+
+export interface Eligibility {
+  eligible: boolean;
+  /** Why not, in words a student can act on. */
+  reason?: string;
+}
+
+export function checkEligibility(c: EligibilityRule, user: { classLevel: ClassLevel; state: string | null }): Eligibility {
+  if (c.classLevels.length > 0 && !c.classLevels.includes(user.classLevel)) {
+    return { eligible: false, reason: `Open to ${c.classLevels.join(', ')} students. You are in ${user.classLevel}` };
+  }
+  if (c.type === 'STATE' && c.state) {
+    if (!user.state) return { eligible: false, reason: `Set your state in your profile to enter. This is for ${c.state}` };
+    if (canonicalState(user.state) !== canonicalState(c.state)) {
+      return { eligible: false, reason: `Only students representing ${c.state} can enter. You represent ${user.state}` };
+    }
+  }
+  if (c.type === 'REGIONAL' && c.region) {
+    if (!user.state) return { eligible: false, reason: `Set your state in your profile to enter. This is for the ${REGION_LABEL[c.region]} zone` };
+    if (regionOfState(user.state) !== c.region) {
+      return { eligible: false, reason: `Open to the ${REGION_LABEL[c.region]} zone. ${user.state} is in a different zone` };
+    }
+  }
+  return { eligible: true };
+}
+
+export interface ScoringRule {
+  pointsPerCorrect: number;
+  penaltyPerWrong: number;
+}
+
+/** Points for a sitting. An unanswered question costs nothing; the total never goes below 0. */
+export function scoreSitting(correct: number, wrong: number, rule: ScoringRule): number {
+  return Math.max(0, correct * rule.pointsPerCorrect - wrong * rule.penaltyPerWrong);
+}
+
+export interface RankableEntry {
+  score: number;
+  timeTakenSec: number;
+  completedAt: Date;
+}
+
+/** The published tie-break order: higher score, then faster time, then who finished first. */
+export function compareEntries(a: RankableEntry, b: RankableEntry): number {
+  return b.score - a.score || a.timeTakenSec - b.timeTakenSec || a.completedAt.getTime() - b.completedAt.getTime();
+}
+
+/** Short, human-readable statement of the tie-break rule, shown on the competition page. */
+export const TIE_BREAK_TEXT = 'Ties are broken by the faster finishing time, then by who finished first.';
+
+/** Fingerprint of an answer sheet, to spot two students who submitted identical sheets. */
+export function answerFingerprint(answers: Record<string, string>): string | null {
+  const pairs = Object.entries(answers).filter(([, v]) => v).sort(([a], [b]) => a.localeCompare(b));
+  if (pairs.length === 0) return null;
+  return createHash('sha256').update(pairs.map(([q, v]) => `${q}:${v}`).join('|')).digest('hex').slice(0, 32);
+}
+
+/** Flags raised when a sitting is recorded. A flag asks for a human look; it is not a verdict. */
+export const FLAG_TOO_FAST = 'TOO_FAST';
+/** Under this many seconds per answered question is faster than anyone can read the question. */
+export const MIN_SECONDS_PER_ANSWER = 2;
+
+export function sittingFlags(answered: number, timeTakenSec: number): string[] {
+  const flags: string[] = [];
+  if (answered >= 5 && timeTakenSec / answered < MIN_SECONDS_PER_ANSWER) flags.push(FLAG_TOO_FAST);
+  return flags;
+}
+
+/** The moment a sitting must be over: the student's own limit or the competition's end, whichever is first. */
+export function sittingDeadline(startedAt: Date, timeLimitSec: number | null, endsAt: Date): Date {
+  const own = timeLimitSec ? new Date(startedAt.getTime() + timeLimitSec * 1000) : endsAt;
+  return own < endsAt ? own : endsAt;
+}
+
+export interface PrizeRange {
+  positionFrom: number;
+  positionTo: number;
+}
+
+/** Problems with a list of prize ranges (empty when valid): positive, ordered, non-overlapping. */
+export function prizeRangeProblems(prizes: PrizeRange[]): string[] {
+  const problems: string[] = [];
+  const sorted = [...prizes].sort((a, b) => a.positionFrom - b.positionFrom);
+  sorted.forEach((p, i) => {
+    if (!Number.isInteger(p.positionFrom) || !Number.isInteger(p.positionTo) || p.positionFrom < 1) problems.push('Prize positions must be whole numbers from 1');
+    else if (p.positionTo < p.positionFrom) problems.push(`Prize ${p.positionFrom} to ${p.positionTo} ends before it starts`);
+    if (i > 0 && p.positionFrom <= sorted[i - 1].positionTo) problems.push(`Prize positions overlap at ${p.positionFrom}`);
+  });
+  return problems;
+}
+
+/** Which prize range a finishing position falls in, if any. */
+export function prizeForPosition<T extends PrizeRange>(prizes: T[], position: number): T | undefined {
+  return prizes.find((p) => position >= p.positionFrom && position <= p.positionTo);
+}

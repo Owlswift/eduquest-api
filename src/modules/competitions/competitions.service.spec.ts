@@ -1,187 +1,144 @@
-import { BadRequestException, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, ForbiddenException, NotFoundException } from '@nestjs/common';
 import { CompetitionsService } from './competitions.service';
 
 describe('CompetitionsService', () => {
-  let prisma: {
-    competition: { findMany: jest.Mock; findUnique: jest.Mock };
-    competitionParticipant: { findMany: jest.Mock; upsert: jest.Mock; findUnique: jest.Mock };
-    user: { findUnique: jest.Mock };
-    dailyActivity: { aggregate: jest.Mock };
-  };
+  let prisma: any;
   let notifications: { notify: jest.Mock };
   let service: CompetitionsService;
+  const day = 86_400_000;
 
-  beforeEach(() => {
-    jest.useFakeTimers().setSystemTime(new Date('2026-06-15T00:00:00Z'));
-    prisma = {
-      competition: { findMany: jest.fn(), findUnique: jest.fn() },
-      competitionParticipant: { findMany: jest.fn(), upsert: jest.fn(), findUnique: jest.fn() },
-      user: { findUnique: jest.fn() },
-      dailyActivity: { aggregate: jest.fn() },
-    };
-    notifications = { notify: jest.fn() };
-    service = new CompetitionsService(prisma as any, notifications as any);
+  const row = (over: Record<string, unknown> = {}) => ({
+    id: 'c1', title: 'June', subtitle: 's', description: null, prizes: [], type: 'MONTHLY', format: 'FIXED_SET', status: 'ACTIVE',
+    startsAt: new Date(Date.now() - day), endsAt: new Date(Date.now() + day), classLevels: [], subjectIds: ['math'], state: null,
+    region: null, questionCount: 3, questionIds: ['q1', 'q2', 'q3'], pointsPerCorrect: 1, penaltyPerWrong: 0, timeLimitSec: 600,
+    participationXp: 0, participationCoins: 0, claimDeadlineDays: 14, prizeList: [], _count: { participants: 4 }, ...over,
   });
 
-  afterEach(() => jest.useRealTimers());
+  beforeEach(() => {
+    prisma = {
+      competition: { findMany: jest.fn(), findFirst: jest.fn(), updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
+      competitionParticipant: { findMany: jest.fn().mockResolvedValue([]), findUnique: jest.fn(), createMany: jest.fn(), updateMany: jest.fn(), count: jest.fn() },
+      user: { findUniqueOrThrow: jest.fn().mockResolvedValue({ classLevel: 'SS2', state: 'Lagos' }), findUnique: jest.fn().mockResolvedValue({ xp: 40 }) },
+      quizSession: { findUnique: jest.fn(), create: jest.fn(), findUniqueOrThrow: jest.fn() },
+      question: { findMany: jest.fn().mockResolvedValue([]) },
+      questionAttempt: { findMany: jest.fn() },
+    };
+    notifications = { notify: jest.fn() };
+    service = new CompetitionsService(prisma, notifications as any, {} as any);
+  });
 
   describe('list', () => {
-    it('marks status, participant count, and join state', async () => {
+    it('hides drafts, follows the clock, and keeps the fields older clients read', async () => {
       prisma.competition.findMany.mockResolvedValue([
-        {
-          id: 'c1',
-          title: 'Ongoing',
-          subtitle: '',
-          prizes: [],
-          startsAt: new Date('2026-06-10'),
-          endsAt: new Date('2026-06-20'),
-          _count: { participants: 3 },
-        },
-        {
-          id: 'c2',
-          title: 'Upcoming',
-          subtitle: '',
-          prizes: [],
-          startsAt: new Date('2026-07-01'),
-          endsAt: new Date('2026-07-10'),
-          _count: { participants: 0 },
-        },
-        {
-          id: 'c3',
-          title: 'Ended',
-          subtitle: '',
-          prizes: [],
-          startsAt: new Date('2026-05-01'),
-          endsAt: new Date('2026-05-10'),
-          _count: { participants: 5 },
-        },
+        row({ id: 'soon', status: 'PUBLISHED', startsAt: new Date(Date.now() + day), endsAt: new Date(Date.now() + 3 * day), prizeList: [{ title: 'Tablet' }] }),
+        row({ id: 'over', status: 'ACTIVE', startsAt: new Date(Date.now() - 3 * day), endsAt: new Date(Date.now() - day) }),
       ]);
-      prisma.competitionParticipant.findMany.mockResolvedValue([{ competitionId: 'c1' }]);
+      prisma.competitionParticipant.findMany.mockResolvedValue([{ competitionId: 'soon', status: 'ENTERED', score: null, rank: null }]);
 
-      const result = await service.list('me');
+      const out = await service.list('u1');
 
-      expect(result.map((c) => c.status)).toEqual(['ongoing', 'upcoming', 'ended']);
-      expect(result[0].isJoined).toBe(true);
-      expect(result[0].participantCount).toBe(3);
-      expect(result[1].isJoined).toBe(false);
+      expect(prisma.competition.findMany.mock.calls[0][0].where).toEqual({ status: { not: 'DRAFT' } });
+      expect(out[0]).toMatchObject({ id: 'soon', status: 'upcoming', lifecycle: 'PUBLISHED', isJoined: true, participantCount: 4, prizes: ['Tablet'] });
+      expect(out[1]).toMatchObject({ id: 'over', status: 'ended', lifecycle: 'CLOSED', isJoined: false });
+      expect(prisma.competition.updateMany).toHaveBeenCalledWith({ where: { id: 'over', status: 'ACTIVE' }, data: { status: 'CLOSED' } });
+    });
+
+    it('says whether the student can enter, and why not', async () => {
+      prisma.competition.findMany.mockResolvedValue([row({ classLevels: ['SS3'] }), row({ id: 'lag', type: 'STATE', state: 'Kano' })]);
+      const [a, b] = await service.list('u1');
+      expect(a).toMatchObject({ eligible: false });
+      expect(a.ineligibleReason).toMatch(/SS3.*SS2/);
+      expect(b.ineligibleReason).toMatch(/Kano/);
     });
   });
 
   describe('join', () => {
-    it('snapshots current XP, upserts idempotently, and notifies on first join', async () => {
-      prisma.competition.findUnique.mockResolvedValue({
-        id: 'c1',
-        title: 'Monthly Challenge',
-        endsAt: new Date('2026-06-20'),
-      });
-      prisma.competitionParticipant.findUnique.mockResolvedValue(null); // not joined yet
-      prisma.user.findUnique.mockResolvedValue({ xp: 250 });
-      prisma.competitionParticipant.upsert.mockResolvedValue({});
-
-      const result = await service.join('u1', 'c1');
-
-      expect(result).toEqual({ joined: true });
-      const arg = prisma.competitionParticipant.upsert.mock.calls[0][0];
-      expect(arg.create).toEqual({ competitionId: 'c1', userId: 'u1', xpAtJoin: 250 });
-      expect(notifications.notify).toHaveBeenCalledWith(
-        'u1',
-        'competition_joined',
-        expect.any(String),
-        expect.stringContaining('Monthly Challenge'),
-        { competitionId: 'c1' },
-      );
+    beforeEach(() => {
+      prisma.competition.findFirst.mockResolvedValue(row());
+      prisma.competitionParticipant.findUnique.mockResolvedValue(null);
     });
 
-    it('does not re-notify when already joined (idempotent re-join)', async () => {
-      prisma.competition.findUnique.mockResolvedValue({
-        id: 'c1',
-        title: 'Monthly Challenge',
-        endsAt: new Date('2026-06-20'),
-      });
-      prisma.competitionParticipant.findUnique.mockResolvedValue({ id: 'existing' });
-      prisma.user.findUnique.mockResolvedValue({ xp: 250 });
-      prisma.competitionParticipant.upsert.mockResolvedValue({});
-
+    it('enters an eligible student and notifies once', async () => {
       await service.join('u1', 'c1');
+      expect(prisma.competitionParticipant.createMany).toHaveBeenCalledWith(expect.objectContaining({ skipDuplicates: true }));
+      expect(notifications.notify).toHaveBeenCalledTimes(1);
 
-      expect(notifications.notify).not.toHaveBeenCalled();
+      prisma.competitionParticipant.findUnique.mockResolvedValue({ id: 'p' });
+      await service.join('u1', 'c1');
+      expect(notifications.notify).toHaveBeenCalledTimes(1); // already in: idempotent
     });
 
-    it('rejects joining after the competition has ended', async () => {
-      prisma.competition.findUnique.mockResolvedValue({
-        id: 'c1',
-        endsAt: new Date('2026-06-01'), // before the pinned "now"
-      });
-
-      await expect(service.join('u1', 'c1')).rejects.toBeInstanceOf(BadRequestException);
-      expect(prisma.competitionParticipant.upsert).not.toHaveBeenCalled();
-    });
-
-    it('throws for an unknown competition', async () => {
-      prisma.competition.findUnique.mockResolvedValue(null);
+    it('refuses an ineligible student, a closed competition and an unknown one', async () => {
+      prisma.competition.findFirst.mockResolvedValue(row({ classLevels: ['SS3'] }));
+      await expect(service.join('u1', 'c1')).rejects.toBeInstanceOf(ForbiddenException);
+      prisma.competition.findFirst.mockResolvedValue(row({ status: 'CLOSED', endsAt: new Date(Date.now() - 1000) }));
+      await expect(service.join('u1', 'c1')).rejects.toThrow(/already ended/);
+      prisma.competition.findFirst.mockResolvedValue(null);
       await expect(service.join('u1', 'ghost')).rejects.toBeInstanceOf(NotFoundException);
     });
   });
 
-  describe('leaderboard', () => {
-    it('ranks by XP earned during the competition window (per DailyActivity), not lifetime total', async () => {
-      prisma.competition.findUnique.mockResolvedValue({
-        id: 'c1',
-        startsAt: new Date('2026-06-10T00:00:00Z'),
-        endsAt: new Date('2026-06-20T00:00:00Z'),
-      });
-      prisma.competitionParticipant.findMany.mockResolvedValue([
-        { userId: 'a', joinedAt: new Date('2026-06-12T00:00:00Z'), user: { id: 'a', fullName: 'Aisha Bello' } },
-        { userId: 'me', joinedAt: new Date('2026-06-11T00:00:00Z'), user: { id: 'me', fullName: 'ola law' } },
-      ]);
-      prisma.dailyActivity.aggregate.mockImplementation(({ where }: any) =>
-        Promise.resolve({ _sum: { xpEarned: where.userId === 'a' ? 20 : 80 } }),
-      );
-
-      const result = await service.leaderboard('me', 'c1');
-
-      expect(result.top).toEqual([
-        { rank: 1, userId: 'me', name: 'Ola', xpEarned: 80, isMe: true },
-        { rank: 2, userId: 'a', name: 'Aisha', xpEarned: 20, isMe: false },
-      ]);
-      expect(result.me?.rank).toBe(1);
+  describe('start', () => {
+    it.each([
+      ['an XP-window competition', { format: 'XP_WINDOW' }, /not by a sitting/],
+      ['one that has not opened', { status: 'PUBLISHED', startsAt: new Date(Date.now() + day), endsAt: new Date(Date.now() + 2 * day) }, /opens/],
+      ['one that has closed', { status: 'ACTIVE', startsAt: new Date(Date.now() - 3 * day), endsAt: new Date(Date.now() - day) }, /closed/],
+    ])('refuses %s', async (_n, over, hint) => {
+      prisma.competition.findFirst.mockResolvedValue(row(over));
+      await expect(service.start('u1', 'c1')).rejects.toThrow(hint);
+      expect(prisma.quizSession.create).not.toHaveBeenCalled();
     });
 
-    it('excludes XP earned before the competition started, even for an early joiner', async () => {
-      prisma.competition.findUnique.mockResolvedValue({
-        id: 'c1',
-        startsAt: new Date('2026-06-10T00:00:00Z'),
-        endsAt: new Date('2026-06-20T00:00:00Z'),
-      });
-      prisma.competitionParticipant.findMany.mockResolvedValue([
-        {
-          userId: 'early',
-          joinedAt: new Date('2026-06-01T00:00:00Z'), // joined 9 days before it started
-          user: { id: 'early', fullName: 'early bird' },
-        },
-      ]);
-      prisma.dailyActivity.aggregate.mockResolvedValue({ _sum: { xpEarned: 999 } });
-
-      await service.leaderboard('early', 'c1');
-
-      const arg = prisma.dailyActivity.aggregate.mock.calls[0][0];
-      // The scoring window is clamped to startsAt, not the earlier joinedAt -
-      // XP earned in the 9 days before the competition began doesn't count.
-      expect(arg.where.date.gte.toISOString()).toBe('2026-06-10T00:00:00.000Z');
+    it('refuses an ineligible student before creating anything', async () => {
+      prisma.competition.findFirst.mockResolvedValue(row({ type: 'REGIONAL', region: 'NORTH_WEST' }));
+      await expect(service.start('u1', 'c1')).rejects.toBeInstanceOf(ForbiddenException);
+      expect(prisma.quizSession.create).not.toHaveBeenCalled();
     });
 
-    it('returns an empty leaderboard when nobody has joined', async () => {
-      prisma.competition.findUnique.mockResolvedValue({
-        id: 'c1',
-        startsAt: new Date('2026-06-01T00:00:00Z'),
-        endsAt: new Date('2026-06-20T00:00:00Z'),
-      });
-      prisma.competitionParticipant.findMany.mockResolvedValue([]);
+    it('does not let a student sit twice', async () => {
+      prisma.competition.findFirst.mockResolvedValue(row());
+      prisma.quizSession.findUnique.mockResolvedValue({ id: 's1', status: 'SUBMITTED', createdAt: new Date(), questionIds: [] });
+      await expect(service.start('u1', 'c1')).rejects.toBeInstanceOf(ConflictException);
+    });
 
-      const result = await service.leaderboard('me', 'c1');
+    it('refuses to resume a sitting whose time ran out', async () => {
+      prisma.competition.findFirst.mockResolvedValue(row({ timeLimitSec: 600 }));
+      prisma.quizSession.findUnique.mockResolvedValue({ id: 's1', status: 'OPEN', createdAt: new Date(Date.now() - 20 * 60_000), questionIds: ['q1'] });
+      await expect(service.start('u1', 'c1')).rejects.toThrow(/time for this competition is up/);
+    });
 
-      expect(result).toEqual({ top: [], me: null });
-      expect(prisma.dailyActivity.aggregate).not.toHaveBeenCalled();
+    it('creates the sitting with the frozen questions, a deadline, and no answers or explanations in the payload', async () => {
+      prisma.competition.findFirst.mockResolvedValue(row());
+      prisma.quizSession.findUnique.mockResolvedValue(null);
+      prisma.quizSession.create.mockImplementation(({ data }: any) => Promise.resolve({ id: 's1', status: 'OPEN', createdAt: new Date(), ...data }));
+      prisma.question.findMany.mockResolvedValue(['q1', 'q2', 'q3'].map((id) => ({
+        id, subjectId: 'math', classLevel: 'SS2', questionText: id, explanation: 'secret', difficulty: 1, correctAnswerId: 'a',
+        options: [{ id: 'a', text: 'A' }, { id: 'b', text: 'B' }],
+      })));
+
+      const out = await service.start('u1', 'c1');
+
+      const data = prisma.quizSession.create.mock.calls[0][0].data;
+      expect(data.competitionId).toBe('c1');
+      expect([...data.questionIds].sort()).toEqual(['q1', 'q2', 'q3']);
+      expect(data.expiresAt.getTime()).toBeLessThanOrEqual(Date.now() + 600_000 + 1000);
+      expect(out.questions).toHaveLength(3);
+      expect(JSON.stringify(out)).not.toMatch(/secret|correctAnswerId/);
+      expect(out.remainingSec).toBeGreaterThan(590);
+      expect(prisma.competitionParticipant.updateMany).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ status: 'IN_PROGRESS' }) }));
+    });
+  });
+
+  describe('review', () => {
+    it('keeps answers hidden until the competition closes', async () => {
+      prisma.competition.findFirst.mockResolvedValue(row());
+      await expect(service.review('u1', 'c1')).rejects.toBeInstanceOf(BadRequestException);
+    });
+
+    it('404s for a student who did not sit it', async () => {
+      prisma.competition.findFirst.mockResolvedValue(row({ status: 'CLOSED', endsAt: new Date(Date.now() - 1000) }));
+      prisma.quizSession.findUnique.mockResolvedValue(null);
+      await expect(service.review('u1', 'c1')).rejects.toBeInstanceOf(NotFoundException);
     });
   });
 });

@@ -12,6 +12,7 @@ import { PrismaService } from '../src/database/prisma.service';
 import { ActivityService } from '../src/modules/activity/activity.service';
 import { ChallengesService } from '../src/modules/challenges/challenges.service';
 import { LedgerService } from '../src/modules/ledger/ledger.service';
+import { CompetitionSittingsService } from '../src/modules/competitions/competition-sittings.service';
 import { QuizService, QUIZ_DAILY_REWARD_CAP } from '../src/modules/quiz/quiz.service';
 import { REWARDS_CATALOG } from '../src/modules/rewards/rewards.catalog';
 import { RewardsService } from '../src/modules/rewards/rewards.service';
@@ -88,7 +89,7 @@ d('integrity (real database)', () => {
     const attempts = new AttemptsService(prisma);
     // Achievement rewards add XP of their own; they are covered in progression.e2e-spec.ts.
     const achievements = { evaluate: async () => [] } as unknown as AchievementsService;
-    quiz = new QuizService(prisma, activity, ledger, attempts, achievements);
+    quiz = new QuizService(prisma, activity, ledger, attempts, achievements, new CompetitionSittingsService(prisma, ledger));
     rewards = new RewardsService(prisma, notifications as any, ledger);
     users = new UsersService(prisma, activity, notifications as any, ledger, quiz, achievements);
     challenges = new ChallengesService(prisma, notifications as any, ledger, attempts, achievements);

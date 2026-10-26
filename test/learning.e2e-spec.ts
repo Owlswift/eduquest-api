@@ -12,6 +12,7 @@ import { ExamsService } from '../src/modules/exams/exams.service';
 import { AchievementsService } from '../src/modules/gamification/achievements.service';
 import { LedgerService } from '../src/modules/ledger/ledger.service';
 import { AttemptsService } from '../src/modules/progress/attempts.service';
+import { CompetitionSittingsService } from '../src/modules/competitions/competition-sittings.service';
 import { QuizService } from '../src/modules/quiz/quiz.service';
 
 const url = process.env.TEST_DATABASE_URL;
@@ -66,7 +67,7 @@ d('daily challenges and exams (real database)', () => {
     const activity = new ActivityService(prisma);
     const attempts = new AttemptsService(prisma);
     achievements = new AchievementsService(prisma, ledger, { notify } as any);
-    quiz = new QuizService(prisma, activity, ledger, attempts, achievements);
+    quiz = new QuizService(prisma, activity, ledger, attempts, achievements, new CompetitionSittingsService(prisma, ledger));
     daily = new DailyChallengesService(prisma);
     exams = new ExamsService(prisma, activity, attempts, achievements);
     // Class level SS3 is used by every test question; clear any other SS3 data from earlier runs.

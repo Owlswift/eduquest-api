@@ -71,6 +71,62 @@ enum QuizSessionStatus {
 /// Whether students can be served a question. Only PUBLISHED questions are
 /// ever issued; RETIRED ones stay in the database so past attempts and
 /// reviews keep working.
+/// Nigeria's six geopolitical zones, used for regional competitions and rankings.
+enum Region {
+  NORTH_CENTRAL
+  NORTH_EAST
+  NORTH_WEST
+  SOUTH_EAST
+  SOUTH_SOUTH
+  SOUTH_WEST
+}
+
+enum CompetitionType {
+  MINI
+  MONTHLY
+  STATE
+  REGIONAL
+  NATIONAL
+}
+
+/// How a competition is scored. XP_WINDOW is the original format (ranked by XP
+/// earned during the window) and is kept only for competitions created before
+/// the rebuild. FIXED_SET has every entrant sit the same questions once.
+enum CompetitionFormat {
+  XP_WINDOW
+  FIXED_SET
+}
+
+/// DRAFT -> PUBLISHED -> ACTIVE (starts) -> CLOSED (ends; validation) ->
+/// FINALISED (results confirmed) -> ARCHIVED. PUBLISHED/ACTIVE/CLOSED advance
+/// with the clock when read; FINALISED and ARCHIVED are admin actions.
+enum CompetitionStatus {
+  DRAFT
+  PUBLISHED
+  ACTIVE
+  CLOSED
+  FINALISED
+  ARCHIVED
+}
+
+enum EntryStatus {
+  ENTERED
+  IN_PROGRESS
+  COMPLETED
+  DISQUALIFIED
+}
+
+enum PrizeKind {
+  COINS
+  AIRTIME
+  DATA
+  DEVICE
+  SCHOLARSHIP
+  BOOKS
+  CERTIFICATE
+  OTHER
+}
+
 enum QuestionStatus {
   DRAFT
   PUBLISHED
@@ -88,6 +144,7 @@ enum AttemptSource {
   CHALLENGE
   DAILY
   EXAM
+  COMPETITION
 }
 
 enum LessonState {
@@ -269,16 +326,22 @@ model QuizSession {
   correctCount Int              @default(0)
   /// Set when this session is a student's attempt at a daily challenge.
   dailyChallengeId String?
+  /// Set when this session is a student's sitting of a competition.
+  competitionId    String?
+  /// Hard deadline for the session (competitions with a time limit).
+  expiresAt        DateTime?
 
   createdAt   DateTime  @default(now())
   submittedAt DateTime?
 
   user           User            @relation(fields: [userId], references: [id], onDelete: Cascade)
   dailyChallenge DailyChallenge? @relation(fields: [dailyChallengeId], references: [id], onDelete: SetNull)
+  competition    Competition?    @relation(fields: [competitionId], references: [id], onDelete: SetNull)
 
-  /// One attempt per student per daily challenge (NULLs, i.e. ordinary
-  /// quizzes, never collide).
+  /// One attempt per student per daily challenge / competition (NULLs, i.e.
+  /// ordinary quizzes, never collide).
   @@unique([userId, dailyChallengeId])
+  @@unique([userId, competitionId])
   @@index([userId, status])
 }
 
@@ -414,38 +477,112 @@ model RewardRedemption {
   @@index([status])
 }
 
-/// A time-boxed contest ranked by XP earned during its window. Curated/
-/// seeded data - there's no admin-authoring UI yet.
+/// A ranked contest. New competitions are FIXED_SET: every entrant sits the
+/// same questions once, scored only from that sitting (never from lifetime XP
+/// or practice). The rules below are frozen when it is published
+/// (PRODUCT.md section 6.3).
 model Competition {
   id       String   @id @default(cuid())
   title    String
   subtitle String
+  /// Plain-text prize list kept for older clients; the structured prizes are in CompetitionPrize.
   prizes   Json // string[]
   startsAt DateTime
   endsAt   DateTime
 
-  createdAt DateTime @default(now())
+  /// Full rules and terms shown to students before they enter.
+  description String?
+  type        CompetitionType   @default(MONTHLY)
+  format      CompetitionFormat @default(XP_WINDOW)
+  status      CompetitionStatus @default(PUBLISHED)
+
+  // Eligibility. An empty list means "everyone".
+  classLevels ClassLevel[]
+  /// Subjects the questions are drawn from (empty = all subjects of the class levels).
+  subjectIds  String[]
+  /// Required for STATE competitions.
+  state       String?
+  /// Required for REGIONAL competitions.
+  region      Region?
+
+  // Scoring (FIXED_SET).
+  questionCount      Int?
+  /// Frozen at publish time.
+  questionIds        String[]
+  pointsPerCorrect   Int       @default(1)
+  /// Points lost per wrong answer (an unanswered question costs nothing). 0 = no penalty.
+  penaltyPerWrong    Int       @default(0)
+  /// Seconds a student has once they start. Null = until the competition closes.
+  timeLimitSec       Int?
+  /// Paid once on completing the sitting, whatever the rank.
+  participationXp    Int       @default(0)
+  participationCoins Int       @default(0)
+  /// Days a winner has to claim a prize before it can pass to the next place.
+  claimDeadlineDays  Int       @default(14)
+
+  publishedAt DateTime?
+  finalisedAt DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @default(now()) @updatedAt
 
   participants CompetitionParticipant[]
+  prizeList    CompetitionPrize[]
+  sessions     QuizSession[]
 
   @@index([startsAt, endsAt])
+  @@index([status])
+}
+
+/// A prize for a range of finishing positions, e.g. 1st, or 2nd to 3rd.
+model CompetitionPrize {
+  id            String    @id @default(cuid())
+  competitionId String
+  positionFrom  Int
+  positionTo    Int
+  title         String
+  kind          PrizeKind @default(OTHER)
+  /// For COINS prizes: paid automatically when the award is fulfilled.
+  coinAmount    Int?
+  sortOrder     Int       @default(0)
+
+  competition Competition @relation(fields: [competitionId], references: [id], onDelete: Cascade)
+
+  @@index([competitionId])
 }
 
 /// A student's entry in a competition. `xpAtJoin` snapshots the student's
 /// total XP the moment they join, so "XP earned in this competition" is
 /// just `currentXp - xpAtJoin` - no separate XP-transaction ledger needed.
 model CompetitionParticipant {
-  id            String   @id @default(cuid())
+  id            String      @id @default(cuid())
   competitionId String
   userId        String
-  xpAtJoin      Int      @default(0)
-  joinedAt      DateTime @default(now())
+  /// Legacy XP_WINDOW competitions only.
+  xpAtJoin      Int         @default(0)
+  joinedAt      DateTime    @default(now())
+
+  // FIXED_SET results.
+  status          EntryStatus @default(ENTERED)
+  startedAt       DateTime?
+  completedAt     DateTime?
+  score           Int?
+  correctCount    Int?
+  wrongCount      Int?
+  timeTakenSec    Int?
+  /// Set when the competition is finalised.
+  rank            Int?
+  /// Machine-raised review flags (e.g. TOO_FAST, SAME_ANSWERS); an admin decides what they mean.
+  flags           String[]    @default([])
+  /// Fingerprint of the answers given, to spot identical answer sheets.
+  answerHash      String?
+  disqualifiedReason String?
 
   competition Competition @relation(fields: [competitionId], references: [id], onDelete: Cascade)
   user        User        @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([competitionId, userId])
   @@index([competitionId])
+  @@index([competitionId, status, score])
 }
 
 /// One row per user per calendar day (Africa/Lagos), tracking how much

@@ -1,9 +1,17 @@
 import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
+import { CompetitionStatus, Prisma, QuestionStatus } from '@prisma/client';
+import { REGION_LABEL } from '../../common/geo/regions';
 import { PrismaService } from '../../database/prisma.service';
+import { effectiveStatus, prizeRangeProblems } from '../competitions/competition-rules';
 import { AuditService } from './audit.service';
-import { CreateCompetitionDto, UpdateCompetitionDto } from './dto/competition.dto';
+import { CreateCompetitionDto, PrizeInputDto, UpdateCompetitionDto } from './dto/competition.dto';
 
-type Status = 'upcoming' | 'ongoing' | 'ended';
+type Full = Prisma.CompetitionGetPayload<{ include: { prizeList: true; _count: { select: { participants: true } } } }>;
+
+const INCLUDE = { prizeList: { orderBy: { sortOrder: 'asc' } }, _count: { select: { participants: true } } } as const;
+
+/** Window after the planned start in which a draft can still be published. */
+const PUBLISH_LATE_TOLERANCE_MS = 5 * 60_000;
 
 @Injectable()
 export class AdminCompetitionsService {
@@ -12,122 +20,344 @@ export class AdminCompetitionsService {
     private audit: AuditService,
   ) {}
 
-  private status(c: { startsAt: Date; endsAt: Date }, now = new Date()): Status {
-    if (now < c.startsAt) return 'upcoming';
-    if (now > c.endsAt) return 'ended';
-    return 'ongoing';
+  // ─── Read ───────────────────────────────────────────────────────────────────
+
+  async list() {
+    const rows = await this.prisma.competition.findMany({ orderBy: { startsAt: 'desc' }, include: INCLUDE });
+    await this.sync(rows);
+    return rows.map((c) => this.view(c));
   }
 
-  private view(c: { id: string; title: string; subtitle: string; prizes: unknown; startsAt: Date; endsAt: Date; createdAt: Date }, participants: number) {
+  async get(id: string) {
+    const c = await this.load(id);
+    const completed = await this.prisma.competitionParticipant.count({ where: { competitionId: id, status: 'COMPLETED' } });
+    return { ...this.view(c), completed, history: await this.audit.history('competition', id) };
+  }
+
+  private async load(id: string): Promise<Full> {
+    const c = await this.prisma.competition.findUnique({ where: { id }, include: INCLUDE });
+    if (!c) throw new NotFoundException('Competition not found');
+    await this.sync([c]);
+    return c;
+  }
+
+  /** Keep stored statuses in step with the clock, as the student API does. */
+  private async sync(rows: { id: string; status: CompetitionStatus; startsAt: Date; endsAt: Date }[]) {
+    const now = new Date();
+    for (const r of rows) {
+      const next = effectiveStatus(r, now);
+      if (next === r.status) continue;
+      await this.prisma.competition.updateMany({ where: { id: r.id, status: r.status }, data: { status: next } });
+      r.status = next;
+    }
+  }
+
+  private view(c: Full) {
     return {
       id: c.id,
       title: c.title,
       subtitle: c.subtitle,
-      prizes: c.prizes as string[],
+      description: c.description,
+      type: c.type,
+      format: c.format,
+      status: c.status,
       startsAt: c.startsAt,
       endsAt: c.endsAt,
       createdAt: c.createdAt,
-      status: this.status(c),
-      participants,
-      // Rules are fixed once a competition starts (PRODUCT.md section 6.3).
-      datesLocked: this.status(c) !== 'upcoming',
+      classLevels: c.classLevels,
+      subjectIds: c.subjectIds,
+      state: c.state,
+      region: c.region,
+      questionCount: c.questionCount,
+      questionsFrozen: c.questionIds.length > 0,
+      pointsPerCorrect: c.pointsPerCorrect,
+      penaltyPerWrong: c.penaltyPerWrong,
+      timeLimitSec: c.timeLimitSec,
+      participationXp: c.participationXp,
+      participationCoins: c.participationCoins,
+      claimDeadlineDays: c.claimDeadlineDays,
+      participants: c._count.participants,
+      prizes: c.prizeList.map((p) => ({ id: p.id, positionFrom: p.positionFrom, positionTo: p.positionTo, title: p.title, kind: p.kind, coinAmount: p.coinAmount })),
+      // What an admin can still change at this stage (see update()).
+      editable: this.editable(c),
+      publishedAt: c.publishedAt,
+      finalisedAt: c.finalisedAt,
     };
   }
 
-  async list() {
-    const rows = await this.prisma.competition.findMany({
-      orderBy: { startsAt: 'desc' },
-      include: { _count: { select: { participants: true } } },
-    });
-    return rows.map((c) => this.view(c, c._count.participants));
+  private editable(c: Pick<Full, 'status' | 'format'>): 'all' | 'schedule_and_prizes' | 'wording' | 'none' {
+    if (c.format === 'XP_WINDOW') return c.status === 'PUBLISHED' ? 'schedule_and_prizes' : c.status === 'ACTIVE' ? 'wording' : 'none';
+    if (c.status === 'DRAFT') return 'all';
+    if (c.status === 'PUBLISHED') return 'schedule_and_prizes';
+    if (c.status === 'ACTIVE') return 'wording';
+    return 'none';
   }
 
-  async get(id: string) {
-    const c = await this.prisma.competition.findUnique({
-      where: { id },
-      include: { _count: { select: { participants: true } } },
-    });
-    if (!c) throw new NotFoundException('Competition not found');
-    return { ...this.view(c, c._count.participants), history: await this.audit.history('competition', id) };
-  }
+  // ─── Create / update ────────────────────────────────────────────────────────
 
   async create(adminId: string, dto: CreateCompetitionDto) {
     const startsAt = new Date(dto.startsAt);
     const endsAt = new Date(dto.endsAt);
     this.assertWindow(startsAt, endsAt);
-    if (endsAt <= new Date()) throw new BadRequestException('The end date must be in the future');
+    this.assertScope(dto.type, dto.state, dto.region);
+    const prizes = this.checkedPrizes(dto.prizes ?? []);
+    if (dto.timeLimitMinutes && dto.timeLimitMinutes * 60_000 > endsAt.getTime() - startsAt.getTime()) {
+      throw new BadRequestException('The time limit is longer than the competition itself');
+    }
+    await this.assertSubjects(dto.subjectIds ?? []);
 
     const c = await this.prisma.competition.create({
-      data: { title: dto.title.trim(), subtitle: dto.subtitle.trim(), prizes: dto.prizes.map((p) => p.trim()), startsAt, endsAt },
+      data: {
+        title: dto.title.trim(),
+        subtitle: dto.subtitle.trim(),
+        description: dto.description?.trim() || null,
+        prizes: prizes.map((p) => p.title),
+        startsAt,
+        endsAt,
+        type: dto.type,
+        format: 'FIXED_SET',
+        status: 'DRAFT',
+        classLevels: dto.classLevels ?? [],
+        subjectIds: dto.subjectIds ?? [],
+        state: dto.type === 'STATE' ? dto.state! : null,
+        region: dto.type === 'REGIONAL' ? dto.region! : null,
+        questionCount: dto.questionCount,
+        pointsPerCorrect: dto.pointsPerCorrect ?? 1,
+        penaltyPerWrong: dto.penaltyPerWrong ?? 0,
+        timeLimitSec: dto.timeLimitMinutes ? dto.timeLimitMinutes * 60 : null,
+        participationXp: dto.participationXp ?? 0,
+        participationCoins: dto.participationCoins ?? 0,
+        claimDeadlineDays: dto.claimDeadlineDays ?? 14,
+        prizeList: { create: prizes.map((p, i) => this.prizeData(p, i)) },
+      },
+      include: INCLUDE,
     });
     await this.audit.log({
       adminId,
       action: 'competition.create',
       entityType: 'competition',
       entityId: c.id,
-      summary: `Created "${c.title}"`,
-      after: { title: c.title, prizes: dto.prizes, startsAt: dto.startsAt, endsAt: dto.endsAt },
+      summary: `Created draft "${c.title}" (${c.type})`,
+      after: this.snapshot(c),
     });
     return this.get(c.id);
   }
 
   async update(adminId: string, id: string, dto: UpdateCompetitionDto) {
-    const before = await this.prisma.competition.findUnique({ where: { id } });
-    if (!before) throw new NotFoundException('Competition not found');
+    const before = await this.load(id);
+    const level = this.editable(before);
+    if (level === 'none') throw new ConflictException('This competition is finished and can no longer be edited');
 
-    const changingDates = dto.startsAt !== undefined || dto.endsAt !== undefined;
-    if (changingDates && this.status(before) !== 'upcoming') {
-      throw new ConflictException('Dates are locked once a competition has started. Edit the title, subtitle or prizes instead');
+    const touched = Object.entries(dto).filter(([, v]) => v !== undefined).map(([k]) => k);
+    const allowed: Record<string, string[]> = {
+      wording: ['title', 'subtitle', 'description'],
+      schedule_and_prizes: ['title', 'subtitle', 'description', 'startsAt', 'endsAt', 'prizes', 'claimDeadlineDays'],
+    };
+    if (level !== 'all') {
+      const forbidden = touched.filter((k) => !allowed[level].includes(k));
+      if (forbidden.length > 0) {
+        throw new ConflictException(
+          `${forbidden.join(', ')} cannot change at this stage: the rules are fixed once a competition is published. Only ${allowed[level].join(', ')} can.`,
+        );
+      }
     }
+
     const startsAt = dto.startsAt ? new Date(dto.startsAt) : before.startsAt;
     const endsAt = dto.endsAt ? new Date(dto.endsAt) : before.endsAt;
-    if (changingDates) this.assertWindow(startsAt, endsAt);
+    if (dto.startsAt || dto.endsAt) this.assertWindow(startsAt, endsAt);
+    const type = dto.type ?? before.type;
+    const state = dto.state !== undefined ? dto.state : before.state;
+    const region = dto.region !== undefined ? dto.region : before.region;
+    if (dto.type || dto.state !== undefined || dto.region) this.assertScope(type, state ?? undefined, region ?? undefined);
+    const prizes = dto.prizes ? this.checkedPrizes(dto.prizes) : null;
+    if (dto.subjectIds) await this.assertSubjects(dto.subjectIds);
+    const limitSec = dto.timeLimitMinutes ? dto.timeLimitMinutes * 60 : before.timeLimitSec;
+    if (limitSec && limitSec * 1000 > endsAt.getTime() - startsAt.getTime()) {
+      throw new BadRequestException('The time limit is longer than the competition itself');
+    }
 
-    const after = await this.prisma.competition.update({
-      where: { id },
-      data: {
-        ...(dto.title !== undefined && { title: dto.title.trim() }),
-        ...(dto.subtitle !== undefined && { subtitle: dto.subtitle.trim() }),
-        ...(dto.prizes !== undefined && { prizes: dto.prizes.map((p) => p.trim()) }),
-        ...(changingDates && { startsAt, endsAt }),
-      },
+    const after = await this.prisma.$transaction(async (tx) => {
+      if (prizes) {
+        await tx.competitionPrize.deleteMany({ where: { competitionId: id } });
+        await tx.competitionPrize.createMany({ data: prizes.map((p, i) => ({ competitionId: id, ...this.prizeData(p, i) })) });
+      }
+      return tx.competition.update({
+        where: { id },
+        data: {
+          ...(dto.title !== undefined && { title: dto.title.trim() }),
+          ...(dto.subtitle !== undefined && { subtitle: dto.subtitle.trim() }),
+          ...(dto.description !== undefined && { description: dto.description.trim() || null }),
+          ...(dto.type !== undefined && { type: dto.type }),
+          ...(dto.classLevels !== undefined && { classLevels: dto.classLevels }),
+          ...(dto.subjectIds !== undefined && { subjectIds: dto.subjectIds }),
+          ...((dto.type !== undefined || dto.state !== undefined) && { state: type === 'STATE' ? state : null }),
+          ...((dto.type !== undefined || dto.region !== undefined) && { region: type === 'REGIONAL' ? region : null }),
+          ...(dto.questionCount !== undefined && { questionCount: dto.questionCount }),
+          ...(dto.pointsPerCorrect !== undefined && { pointsPerCorrect: dto.pointsPerCorrect }),
+          ...(dto.penaltyPerWrong !== undefined && { penaltyPerWrong: dto.penaltyPerWrong }),
+          ...(dto.timeLimitMinutes !== undefined && { timeLimitSec: dto.timeLimitMinutes * 60 }),
+          ...(dto.participationXp !== undefined && { participationXp: dto.participationXp }),
+          ...(dto.participationCoins !== undefined && { participationCoins: dto.participationCoins }),
+          ...(dto.claimDeadlineDays !== undefined && { claimDeadlineDays: dto.claimDeadlineDays }),
+          ...(prizes && { prizes: prizes.map((p) => p.title) }),
+          ...((dto.startsAt || dto.endsAt) && { startsAt, endsAt }),
+        },
+        include: INCLUDE,
+      });
     });
+
     await this.audit.log({
       adminId,
       action: 'competition.update',
       entityType: 'competition',
       entityId: id,
-      summary: `Edited "${after.title}"`,
-      before: { title: before.title, subtitle: before.subtitle, prizes: before.prizes as string[], startsAt: before.startsAt.toISOString(), endsAt: before.endsAt.toISOString() },
-      after: { title: after.title, subtitle: after.subtitle, prizes: after.prizes as string[], startsAt: after.startsAt.toISOString(), endsAt: after.endsAt.toISOString() },
+      summary: `Edited "${after.title}" (${touched.join(', ')})`,
+      before: this.snapshot(before),
+      after: this.snapshot(after),
     });
     return this.get(id);
   }
 
-  /** Only a competition nobody joined can be removed. */
-  async remove(adminId: string, id: string) {
-    const c = await this.prisma.competition.findUnique({
-      where: { id },
-      include: { _count: { select: { participants: true } } },
+  // ─── Publish / close / delete ───────────────────────────────────────────────
+
+  /**
+   * Freezes the rules. Picks the questions now (so every entrant gets the same
+   * set) from published questions matching the class levels and subjects, and
+   * from this point the scoring and eligibility cannot change.
+   */
+  async publish(adminId: string, id: string) {
+    const c = await this.load(id);
+    if (c.status !== 'DRAFT') throw new ConflictException('Only a draft can be published');
+    if (c.format !== 'FIXED_SET' || !c.questionCount) throw new BadRequestException('Set how many questions the competition has first');
+    if (c.endsAt <= new Date()) throw new BadRequestException('The end date has passed. Edit the dates first');
+    if (c.startsAt.getTime() < Date.now() - PUBLISH_LATE_TOLERANCE_MS) {
+      throw new BadRequestException('The start date has passed. Edit the dates first');
+    }
+    if (c.type === 'STATE' && !c.state) throw new BadRequestException('A state competition needs a state');
+    if (c.type === 'REGIONAL' && !c.region) throw new BadRequestException('A regional competition needs a region');
+
+    const pool = await this.prisma.question.findMany({
+      where: {
+        status: QuestionStatus.PUBLISHED,
+        ...(c.classLevels.length > 0 && { classLevel: { in: c.classLevels } }),
+        ...(c.subjectIds.length > 0 && { subjectId: { in: c.subjectIds } }),
+      },
+      select: { id: true },
     });
-    if (!c) throw new NotFoundException('Competition not found');
-    if (c._count.participants > 0) {
+    if (pool.length < c.questionCount) {
+      throw new BadRequestException(`Only ${pool.length} published questions match, but the competition needs ${c.questionCount}`);
+    }
+    const questionIds = shuffle(pool.map((q) => q.id)).slice(0, c.questionCount);
+
+    const flipped = await this.prisma.competition.updateMany({
+      where: { id, status: 'DRAFT' },
+      data: { status: 'PUBLISHED', questionIds, publishedAt: new Date() },
+    });
+    if (flipped.count === 0) throw new ConflictException('This competition was just published by someone else');
+    await this.audit.log({
+      adminId,
+      action: 'competition.publish',
+      entityType: 'competition',
+      entityId: id,
+      summary: `Published "${c.title}" with ${questionIds.length} questions`,
+      before: { status: 'DRAFT' },
+      after: { status: 'PUBLISHED', questions: questionIds.length },
+    });
+    return this.get(id);
+  }
+
+  /** Ends a running competition now (for example if a question was found to be wrong). */
+  async closeNow(adminId: string, id: string, reason: string) {
+    const c = await this.load(id);
+    if (c.status !== 'ACTIVE') throw new ConflictException('Only a running competition can be closed early');
+    await this.prisma.competition.update({ where: { id }, data: { status: 'CLOSED', endsAt: new Date() } });
+    await this.audit.log({
+      adminId,
+      action: 'competition.close',
+      entityType: 'competition',
+      entityId: id,
+      summary: `Closed "${c.title}" early: ${reason}`,
+      before: { status: c.status, endsAt: c.endsAt.toISOString() },
+      after: { status: 'CLOSED' },
+    });
+    return this.get(id);
+  }
+
+  /** A draft can always go; anything published only while nobody has entered. */
+  async remove(adminId: string, id: string) {
+    const c = await this.load(id);
+    if (c.status !== 'DRAFT' && c._count.participants > 0) {
       throw new ConflictException(`${c._count.participants} students have joined. A competition with entries cannot be deleted`);
     }
+    if (c.status === 'FINALISED' || c.status === 'ARCHIVED') throw new ConflictException('Finished competitions are kept as a record');
     await this.prisma.competition.delete({ where: { id } });
     await this.audit.log({
       adminId,
       action: 'competition.delete',
       entityType: 'competition',
       entityId: id,
-      summary: `Deleted "${c.title}" (no entries)`,
-      before: { title: c.title, startsAt: c.startsAt.toISOString(), endsAt: c.endsAt.toISOString() },
+      summary: `Deleted "${c.title}" (${c.status.toLowerCase()}, no entries)`,
+      before: this.snapshot(c),
     });
     return { deleted: true };
   }
+
+  // ─── Rules ──────────────────────────────────────────────────────────────────
 
   private assertWindow(startsAt: Date, endsAt: Date) {
     if (Number.isNaN(startsAt.getTime()) || Number.isNaN(endsAt.getTime())) throw new BadRequestException('Invalid date');
     if (endsAt <= startsAt) throw new BadRequestException('The end date must be after the start date');
   }
+
+  private assertScope(type: string, state?: string, region?: string) {
+    if (type === 'STATE' && !state) throw new BadRequestException('A state competition needs a state');
+    if (type === 'REGIONAL' && !region) throw new BadRequestException(`A regional competition needs a region (${Object.values(REGION_LABEL).join(', ')})`);
+  }
+
+  private checkedPrizes(prizes: PrizeInputDto[]): PrizeInputDto[] {
+    const problems = prizeRangeProblems(prizes);
+    for (const p of prizes) if (p.kind === 'COINS' && !p.coinAmount) problems.push(`"${p.title}" is a coin prize, so it needs an amount`);
+    if (problems.length > 0) throw new BadRequestException(problems.join('. '));
+    return [...prizes].sort((a, b) => a.positionFrom - b.positionFrom);
+  }
+
+  private prizeData(p: PrizeInputDto, i: number) {
+    return { positionFrom: p.positionFrom, positionTo: p.positionTo, title: p.title.trim(), kind: p.kind, coinAmount: p.kind === 'COINS' ? (p.coinAmount ?? null) : null, sortOrder: i };
+  }
+
+  private async assertSubjects(ids: string[]) {
+    if (ids.length === 0) return;
+    const known = await this.prisma.subject.findMany({ where: { id: { in: ids } }, select: { id: true } });
+    const unknown = ids.filter((id) => !known.some((k) => k.id === id));
+    if (unknown.length > 0) throw new BadRequestException(`Unknown subject: ${unknown.join(', ')}`);
+  }
+
+  private snapshot(c: Full): Prisma.InputJsonValue {
+    return {
+      title: c.title,
+      subtitle: c.subtitle,
+      type: c.type,
+      status: c.status,
+      startsAt: c.startsAt.toISOString(),
+      endsAt: c.endsAt.toISOString(),
+      classLevels: c.classLevels,
+      subjectIds: c.subjectIds,
+      state: c.state,
+      region: c.region,
+      questionCount: c.questionCount,
+      pointsPerCorrect: c.pointsPerCorrect,
+      penaltyPerWrong: c.penaltyPerWrong,
+      timeLimitSec: c.timeLimitSec,
+      prizes: c.prizeList.map((p) => `${p.positionFrom}-${p.positionTo}: ${p.title}`),
+    };
+  }
+}
+
+function shuffle<T>(items: T[]): T[] {
+  const a = [...items];
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [a[i], a[j]] = [a[j], a[i]];
+  }
+  return a;
 }
