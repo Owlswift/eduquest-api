@@ -14,7 +14,7 @@ import { ChallengesService } from '../src/modules/challenges/challenges.service'
 import { LedgerService } from '../src/modules/ledger/ledger.service';
 import { CompetitionSittingsService } from '../src/modules/competitions/competition-sittings.service';
 import { QuizService, QUIZ_DAILY_REWARD_CAP } from '../src/modules/quiz/quiz.service';
-import { REWARDS_CATALOG } from '../src/modules/rewards/rewards.catalog';
+import { AuditService } from '../src/modules/admin/audit.service';
 import { RewardsService } from '../src/modules/rewards/rewards.service';
 import { UsersService } from '../src/modules/users/users.service';
 import { AchievementsService } from '../src/modules/gamification/achievements.service';
@@ -90,7 +90,7 @@ d('integrity (real database)', () => {
     // Achievement rewards add XP of their own; they are covered in progression.e2e-spec.ts.
     const achievements = { evaluate: async () => [] } as unknown as AchievementsService;
     quiz = new QuizService(prisma, activity, ledger, attempts, achievements, new CompetitionSittingsService(prisma, ledger));
-    rewards = new RewardsService(prisma, notifications as any, ledger);
+    rewards = new RewardsService(prisma, notifications as any, ledger, new AuditService(prisma));
     users = new UsersService(prisma, activity, notifications as any, ledger, quiz, achievements);
     challenges = new ChallengesService(prisma, notifications as any, ledger, attempts, achievements);
     await prisma.subject.create({ data: { id: subjectId, name: tag, icon: 'i', color: '#000' } });
@@ -133,7 +133,8 @@ d('integrity (real database)', () => {
   });
 
   describe('rewards', () => {
-    const cost = REWARDS_CATALOG[0].coinCost;
+    const cost = 500;
+    const rewardId = 'airtime_500'; // seeded by the rewards migration
 
     it('pays for concurrent redemptions only as far as the balance reaches', async () => {
       const u = await makeUser({ coins: cost * 2 + 1 });
@@ -142,7 +143,7 @@ d('integrity (real database)', () => {
       });
 
       const attempts = await Promise.allSettled(
-        Array.from({ length: 6 }, () => rewards.redeem(u, REWARDS_CATALOG[0].id)),
+        Array.from({ length: 6 }, () => rewards.redeem(u, rewardId)),
       );
 
       expect(attempts.filter((a) => a.status === 'fulfilled')).toHaveLength(2);
@@ -157,13 +158,14 @@ d('integrity (real database)', () => {
       await prisma.ledgerEntry.create({
         data: { userId: u, currency: 'COIN', amount: cost, reason: 'seed', idempotencyKey: `seed:${u}` },
       });
-      await rewards.redeem(u, REWARDS_CATALOG[0].id);
+      await rewards.redeem(u, rewardId);
       const red = await prisma.rewardRedemption.findFirstOrThrow({ where: { userId: u } });
+      const adminUser = await makeUser({ role: 'ADMIN' });
 
       const attempts = await Promise.allSettled([
-        rewards.adminReject(red.id),
-        rewards.adminReject(red.id),
-        rewards.adminFulfill(red.id),
+        rewards.adminReject(adminUser, red.id),
+        rewards.adminReject(adminUser, red.id),
+        rewards.adminFulfill(adminUser, red.id),
       ]);
 
       expect(attempts.filter((a) => a.status === 'fulfilled')).toHaveLength(1);

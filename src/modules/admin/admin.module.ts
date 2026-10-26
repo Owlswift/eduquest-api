@@ -7,12 +7,12 @@ import { AdminContentController } from './admin-content.controller';
 import { AdminQuestionsService } from './admin-questions.service';
 import { AdminController } from './admin.controller';
 import { AdminService } from './admin.service';
-import { AuditService } from './audit.service';
+import { AdminRewardsService } from './admin-rewards.service';
+import { AuditModule } from './audit.module';
 
 @Module({
-  imports: [JwtModule.register({}), QuizModule],
+  imports: [JwtModule.register({}), QuizModule, AuditModule],
   controllers: [AdminController, AdminContentController],
-  providers: [AdminService, AdminQuestionsService, AdminCompetitionsService, AdminCompetitionResultsService, AuditService],
-  exports: [AuditService],
+  providers: [AdminService, AdminQuestionsService, AdminCompetitionsService, AdminCompetitionResultsService, AdminRewardsService],
 })
 export class AdminModule {}

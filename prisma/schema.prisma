@@ -32,8 +32,12 @@ enum UserRole {
 /// not a payment/vendor integration status.
 enum RedemptionStatus {
   PENDING
+  /// Checked and being arranged; the coins are already taken.
+  APPROVED
   FULFILLED
   REJECTED
+  /// The student changed their mind while it was still pending.
+  CANCELLED
 }
 
 /// Lifecycle of a Challenge (see the Challenge model): PENDING until the
@@ -522,6 +526,28 @@ model PasswordResetOtp {
   @@index([userId])
 }
 
+/// A reward students can redeem with coins. Editable by admins; `id` is a
+/// stable slug so older redemptions still point at it. A redemption keeps its
+/// own copy of the title and price, so editing a reward never rewrites history.
+model Reward {
+  id          String    @id
+  title       String
+  subtitle    String
+  description String?
+  coinCost    Int
+  /// Units left; null means unlimited.
+  stock       Int?
+  active      Boolean   @default(true)
+  kind        PrizeKind @default(OTHER)
+  /// Name of an illustration in the design system's assets.
+  imageKey    String?
+  sortOrder   Int       @default(0)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @default(now()) @updatedAt
+
+  @@index([active, sortOrder])
+}
+
 /// A record of coins spent on a reward. The catalogue itself (title,
 /// cost) is a small fixed list in code, not a DB table - there's no
 /// admin-authoring UI for it yet, so nothing to look up.
@@ -534,7 +560,12 @@ model RewardRedemption {
   status   RedemptionStatus @default(PENDING)
 
   createdAt   DateTime  @default(now())
+  approvedAt  DateTime?
   fulfilledAt DateTime?
+  /// When it was closed without delivery (rejected or cancelled).
+  closedAt    DateTime?
+  /// Admin note shown to the student (why it was rejected, what was sent).
+  note        String?
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 

@@ -11,6 +11,8 @@ import { CreateCompetitionDto, UpdateCompetitionDto } from './dto/competition.dt
 import { CloseAwardDto, CloseCompetitionDto, FulfilAwardDto, ReasonDto } from './dto/competition-actions.dto';
 import { AdminCompetitionResultsService } from './admin-competition-results.service';
 import { PrizesService } from '../competitions/prizes.service';
+import { AdminRewardsService } from './admin-rewards.service';
+import { CreateRewardDto, UpdateRewardDto } from './dto/reward.dto';
 import { CreateQuestionDto, SetStatusDto, UpdateQuestionDto } from './dto/question.dto';
 
 @ApiTags('admin')
@@ -24,6 +26,7 @@ export class AdminContentController {
     private competitions: AdminCompetitionsService,
     private results: AdminCompetitionResultsService,
     private prizes: PrizesService,
+    private rewards: AdminRewardsService,
   ) {}
 
   // ─── Question bank ──────────────────────────────────────────────────────────
@@ -179,5 +182,30 @@ export class AdminContentController {
   @ApiOperation({ summary: 'Verification failed: reject and (by default) pass to the next place' })
   rejectAward(@CurrentUser() admin: any, @Param('id') id: string, @Body() dto: CloseAwardDto) {
     return this.prizes.reject(admin.sub, id, dto.reason, dto.promote ?? true);
+  }
+
+  // ─── Rewards catalogue ──────────────────────────────────────────────────────
+
+  @Get('rewards')
+  @ApiOperation({ summary: 'The whole rewards catalogue, including switched-off rewards, with redemption counts' })
+  listRewards() {
+    return this.rewards.list();
+  }
+
+  @Post('rewards')
+  createReward(@CurrentUser() admin: any, @Body() dto: CreateRewardDto) {
+    return this.rewards.create(admin.sub, dto);
+  }
+
+  @Patch('rewards/:id')
+  @ApiOperation({ summary: 'Edit price, stock (null = unlimited), copy or visibility. Past redemptions keep their price' })
+  updateReward(@CurrentUser() admin: any, @Param('id') id: string, @Body() dto: UpdateRewardDto) {
+    return this.rewards.update(admin.sub, id, dto);
+  }
+
+  @Delete('rewards/:id')
+  @ApiOperation({ summary: 'Delete a reward nobody redeemed (otherwise switch it off)' })
+  deleteReward(@CurrentUser() admin: any, @Param('id') id: string) {
+    return this.rewards.remove(admin.sub, id);
   }
 }

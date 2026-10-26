@@ -1,12 +1,13 @@
 import { Controller, Get, Post, Param, Body, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
+import { Throttle } from '@nestjs/throttler';
 import { UserRole } from '@prisma/client';
 import { RewardsService } from './rewards.service';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../../common/guards/roles.guard';
 import { Roles } from '../../common/decorators/roles.decorator';
-import { RejectRedemptionDto } from './dto/reject-redemption.dto';
+import { FulfilRedemptionDto, RejectRedemptionDto } from './dto/reject-redemption.dto';
 
 @ApiTags('rewards')
 @ApiBearerAuth('access-token')
@@ -17,21 +18,30 @@ export class RewardsController {
 
   // GET /rewards
   @Get()
-  @ApiOperation({ summary: 'List reward catalogue with coin balance and affordability' })
+  @ApiOperation({ summary: 'Active rewards with stock, affordability and coins still needed' })
   async list(@CurrentUser() user: any) {
     return this.rewards.list(user.sub);
   }
 
   // GET /rewards/history
   @Get('history')
-  @ApiOperation({ summary: 'Past redemptions, most recent first' })
+  @ApiOperation({ summary: 'My redemptions with status; pending ones can be cancelled' })
   async history(@CurrentUser() user: any) {
     return this.rewards.history(user.sub);
   }
 
+  // POST /rewards/redemptions/:id/cancel
+  @Post('redemptions/:id/cancel')
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
+  @ApiOperation({ summary: 'Take back a pending request: coins and stock are returned' })
+  async cancel(@CurrentUser() user: any, @Param('id') id: string) {
+    return this.rewards.cancel(user.sub, id);
+  }
+
   // POST /rewards/:id/redeem
   @Post(':id/redeem')
-  @ApiOperation({ summary: 'Spend coins on a reward' })
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
+  @ApiOperation({ summary: 'Spend coins on a reward (takes one unit of stock)' })
   async redeem(@CurrentUser() user: any, @Param('id') id: string) {
     return this.rewards.redeem(user.sub, id);
   }
@@ -44,9 +54,18 @@ export class RewardsController {
   @Get('admin/queue')
   @UseGuards(RolesGuard)
   @Roles(UserRole.ADMIN)
-  @ApiOperation({ summary: 'List pending redemptions awaiting manual fulfillment' })
+  @ApiOperation({ summary: 'Pending and approved redemptions awaiting delivery' })
   async adminQueue() {
     return this.rewards.adminQueue();
+  }
+
+  // POST /rewards/admin/:id/approve
+  @Post('admin/:id/approve')
+  @UseGuards(RolesGuard)
+  @Roles(UserRole.ADMIN)
+  @ApiOperation({ summary: 'Mark a pending redemption as checked and being arranged' })
+  async adminApprove(@CurrentUser() admin: any, @Param('id') id: string) {
+    return this.rewards.adminApprove(admin.sub, id);
   }
 
   // POST /rewards/admin/:id/fulfill
@@ -54,16 +73,16 @@ export class RewardsController {
   @UseGuards(RolesGuard)
   @Roles(UserRole.ADMIN)
   @ApiOperation({ summary: 'Mark a redemption as delivered' })
-  async adminFulfill(@Param('id') id: string) {
-    return this.rewards.adminFulfill(id);
+  async adminFulfill(@CurrentUser() admin: any, @Param('id') id: string, @Body() dto: FulfilRedemptionDto) {
+    return this.rewards.adminFulfill(admin.sub, id, dto.note);
   }
 
   // POST /rewards/admin/:id/reject
   @Post('admin/:id/reject')
   @UseGuards(RolesGuard)
   @Roles(UserRole.ADMIN)
-  @ApiOperation({ summary: "Mark a redemption as undeliverable and refund the student's coins" })
-  async adminReject(@Param('id') id: string, @Body() dto: RejectRedemptionDto) {
-    return this.rewards.adminReject(id, dto.reason);
+  @ApiOperation({ summary: "Mark a redemption as undeliverable: refunds the student's coins and restocks" })
+  async adminReject(@CurrentUser() admin: any, @Param('id') id: string, @Body() dto: RejectRedemptionDto) {
+    return this.rewards.adminReject(admin.sub, id, dto.reason);
   }
 }
